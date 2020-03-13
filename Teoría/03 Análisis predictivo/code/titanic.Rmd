@@ -12,7 +12,7 @@ Preprocesamiento de datos con el dataset [titanic](https://www.kaggle.com/c/tita
 
 **En este problema analizaremos qué tipos de personas tuvieron más probabilidades de sobrevivir. Para ello, aplicaremos técnicas de aprendizaje automático que nos permitirán predecir qué pasajeros sobrevivieron al hundimiento.**
 
-En primer lugar, nos centraremos en el pre-procesamiento de los datos utilizando [tidyverse](https://www.tidyverse.org), una colección de paquetes de R para Ciencia de Datos. En el libro _[R for Data Science](http://r4ds.had.co.nz)_ podemos encontrar documentación detallada sobre [tidyverse](https://www.tidyverse.org).
+En primer lugar, nos centraremos en el pre-procesamiento de los datos utilizando [tidyverse](https://www.tidyverse.org), una colección de paquetes de R para Ciencia de Datos. En el libro _[R for Data Science](http://r4ds.had.co.nz)_ podemos encontrar documentación detallada sobre [tidyverse](https://www.tidyverse.org). A continuación pasaremos a estudiar la creación de modelos de clasificación con [<tt>caret</tt>](http://topepo.github.io/caret/). En el libro _[Applied Predictive Modeling](https://link.springer.com/book/10.1007%2F978-1-4614-6849-3)_ (gratuito desde RedUGR) podemos encontrar documentación detallada sobre [<tt>caret</tt>](http://topepo.github.io/caret/).
 
 <br/>
 **Índice**
@@ -229,7 +229,7 @@ write_csv(test, "men-and-some-women-died.csv")
 ## Predicción automática
 Los modelos de predicción anteriores expresan un conjunto de reglas heurísticas obtenidas mediante análisis exploratorio de los datos (EDA, en inglés). Para crear un modelo de clasificación de forma automática utilizaremos  [<tt>caret</tt>](http://topepo.github.io/caret/). Este paquete es un _wrapper_ para numerosos algoritmos de aprendizaje automático, ofreciendo una API simple y unificada. 
 
-En este ejemplo utilizamos árboles de regresión (CART, _classification and regression trees_) con [<tt>rpart</tt>](https://rpubs.com/jboscomendoza/arboles_decision_clasificacion).. Estos árboles admiten un solo parámetro denominado _cp_ y que denota la complejidad permitida para los árboles resultado --una medida calculada a partir de la profundidad, la amplitud y el número de variables del árbol.
+En este ejemplo utilizamos árboles de regresión (CART, _classification and regression trees_) con [<tt>rpart</tt>](https://rpubs.com/jboscomendoza/arboles_decision_clasificacion). Estos árboles admiten un solo parámetro denominado _cp_ y que denota la complejidad permitida para los árboles resultado --una medida calculada a partir de la profundidad, la amplitud y el número de variables del árbol.
 
 ### Preprocesamiento
 Antes de realizar la predicción automática, se realizan varias tareas sencillas de preprocesamiento:
