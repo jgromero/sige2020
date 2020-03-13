@@ -229,11 +229,17 @@ write_csv(test, "men-and-some-women-died.csv")
 ## Predicción automática
 Los modelos de predicción anteriores expresan un conjunto de reglas heurísticas obtenidas mediante análisis exploratorio de los datos (EDA, en inglés). Para crear un modelo de clasificación de forma automática utilizaremos  [<tt>caret</tt>](http://topepo.github.io/caret/). Este paquete es un _wrapper_ para numerosos algoritmos de aprendizaje automático, ofreciendo una API simple y unificada. 
 
-En este ejemplo utilizamos árboles de regresión (CART, _classification and regression trees_). Estos árboles admiten un solo parámetro denominado _cp_ y que denota la complejidad permitida para los árboles resultado --una medida calculada a partir de la profundidad, la amplitud y el número de variables del árbol.
+En este ejemplo utilizamos árboles de regresión (CART, _classification and regression trees_) con [<tt>rpart</tt>](https://rpubs.com/jboscomendoza/arboles_decision_clasificacion).. Estos árboles admiten un solo parámetro denominado _cp_ y que denota la complejidad permitida para los árboles resultado --una medida calculada a partir de la profundidad, la amplitud y el número de variables del árbol.
+
+### Preprocesamiento
+Antes de realizar la predicción automática, se realizan varias tareas sencillas de preprocesamiento:
+
+* Codificación de variables: _Survived_ = {'Yes', 'No'}, _Pclass_ = <tt>factor</tt>
+* Discretización de variables numéricas: _Fare\_Interval_ = {'More.than.30', 'Between.20.30', 'Between.10.20', 'Less.than.10'}
+* Selección de variables: solo se consideran para la predicción: _Survived_ (variable objetivo), _Pclass_, _Sex_, _Fare_Interval_
 
 ```{r}
 library(caret)
-
 data <-
   data_raw %>%
   mutate(Survived = as.factor(ifelse(Survived == 1, 'Yes', 'No'))) %>%
@@ -245,38 +251,66 @@ data <-
       Fare < 20 & Fare >= 10 ~ 'Between.10.20',
       Fare < 10 ~ 'Less.than.10'))) %>%
   select(Survived, Pclass, Sex, Fare_Interval)
+```
 
-# Parámetros
+### Parámetros del algoritmo de aprendizaje
+Una vez preparados los datos, se definen los parámetros del algoritmo de aprendizaje con [<tt>trainControl</tt>](https://topepo.github.io/caret/model-training-and-tuning.html#control). En este caso, la implementación de CART en [<tt>caret</tt>](http://topepo.github.io/caret/) solo tiene un parámetro _cp_ (complejidad del árbol), que suele configurarse con valores entre 0 y 0.1. El _grid_ de parámetros se especifica utilizando la función [<tt>expand.grid]</tt>(https://topepo.github.io/caret/model-training-and-tuning.html#grids), el nombre del parámetro (_cp_, en este caso) y, a continuación, un vector o una lista de valores.
+
+```{r}
 rpartCtrl <- trainControl(classProbs = TRUE)
-rpartParametersGrid <- expand.grid(.cp = c(0.01))
+rpartParametersGrid <- expand.grid(.cp = c(0.01, 0.05)) # se pide que se prueben con la lista de valores .cp = {0.01, 0.05}
+```
 
-# Creación de conjuntos de datos de entrenamiento (70%) y validación (20%)
+### Conjuntos de entrenamiento y validación
+A continuación, se crean los conjuntos de entrenamiento y validación utilizando [<tt>createDataPartition</tt>](https://rdrr.io/rforge/caret/man/createDataPartition.html). En este caso utilizaremos 70% para entrenamiento (30% para validación) con selección aleatoria. El resultado de [<tt>createDataPartition</tt>](https://rdrr.io/rforge/caret/man/createDataPartition.html) es un vector (<tt>list = FALSE</tt>) con los números de fila que se han seleccionado para el entrenamiento.
+
+```{r}
 set.seed(0)
-trainIndex <- createDataPartition(data$Survived, p = .7, list = FALSE, times = 1)
+trainIndex <- createDataPartition(data$Survived, p = .7, list = FALSE)
 train <- data[trainIndex, ] 
 val   <- data[-trainIndex, ]
+```
 
-# Aprendizaje del modelo
-rpartModel <- train(Survived ~ ., data = train, method = "rpart", metric = "Accuracy", trControl = rpartCtrl, tuneGrid = rpartParametersGrid)
-```
-Podemos visualizar el modelo de reglas.
+### Entrenamiento del modelo
+Una vez listos todos los elementos necesarios para el entrenamiento, podemos utilizar [<tt>train</tt>]. En este caso, queremos predecir _Survived_ a partir del resto de variables: <tt>Survived ~ .</tt>. La métrica para estudiar la calidad del clasificar es la precisión (<tt>Accuracy</tt>).
 ```{r}
-library(partykit)
-library(rattle)
-rpartModel_party <- as.party(rpartModel$finalModel)
-plot(rpartModel_party)
-fancyRpartPlot(rpartModel$finalModel)
-asRules(rpartModel$finalModel)
+rpartModel <- train(Survived ~ ., 
+                    data = train, 
+                    method = "rpart", 
+                    metric = "Accuracy", 
+                    trControl = rpartCtrl, 
+                    tuneGrid = rpartParametersGrid)
 ```
-Y calcular la precisión del modelo sobre los datos de validación.
+
+El modelo de predicción se almacena en el objeto generado por <tt>train</tt>, junto a otros valores relevantes, como las métricas de entrenamiento. En este ejemplo se puede ver que el <tt>Accuracy</tt> obtenido con _cp_ = 0.01 es más alto que con 0.05; por tanto, el modelo final será el primero.
+```{r}
+rpartModel
+```
+
+El árbol de decisión se almacena en rpartModel$finalModel y puede visualizarse como conjunto de reglas. *NOTA*: Hay que tener en cuenta que, por defecto, rpart utiliza variables '[dummy](https://miro.medium.com/max/2182/1*LkfPVrhoF_TLSeSXzhB8sA.png)' para codificar las variables categóricas como variables binarias.
+```{r}
+rpartModel$finalModel
+```
+
+Además, apoyándonos en [<tt>rpart.plot</tt>](http://www.milbo.org/rpart-plot/prp.pdf), podemos visualizar el árbol de decisión y el modelo de reglas obtenido. 
+```{r}
+library(rpart.plot)
+rpart.plot(rpartModel$finalModel)
+```
+
+### Validación del modelo
+Una vez entrenado el modelo, podemos realizar predicciones, tanto 'en crudo' (salida: _Yes_, _No_) como con probabilidad de supervivencia. Con las predicciones 'en crudo' podemos generar una matriz de confusión. Con las predicciones como probabilidades, se podría establecer un umbral a partir del cual se predice _Yes_ y por debajo _No_.
 ```{r}
 prediction <- predict(rpartModel, val, type = "raw") 
 cm_train <- confusionMatrix(prediction, val[["Survived"]])
 cm_train
-
-prediction <- predict(rpartModel, val, type = "prob")  # probabilidad de superviviencia
 ```
-Podemos, finalmente, tomar el modelo y generar la predicción para los datos de test a partir de las columnas (Pclass, Sex, Fare_Interval).
+```{r}
+prediction <- predict(rpartModel, val, type = "prob") 
+```
+
+### Test del modelo
+Podemos, finalmente, tomar el modelo y generar la predicción para los datos de test a partir de las columnas (_Pclass_, _Sex_, _Fare\_Interval_).
 ```{r}
 data_test_raw <- read_csv('test.csv')
 test <- 
@@ -299,36 +333,73 @@ prediction_table <-
 write_csv(prediction_table, "caret-classification-basic.csv")
 ```
 
-Podemos considerar también otras medidas de calidad del clasificador; por ejemplo, ROC:
+### Medidas alternativas
+Podemos considerar también otras medidas de calidad del clasificador para su uso dentro de <tt>train</tt>; por ejemplo, ROC. Para ello necesitamos añadir en el <tt>trainControl</tt> la función predefinida <tt>twoClassSummary</tt>, que calcula varias estadísticas necesarias para la métrica ROC.
 ```{r}
-rpartCtrl <- trainControl(verboseIter = F, classProbs = TRUE, summaryFunction = twoClassSummary)
-rpartModel <- train(Survived ~ ., data = train, method = "rpart", metric = "ROC", trControl = rpartCtrl, tuneGrid = rpartParametersGrid)
+rpartCtrl <- trainControl(classProbs = TRUE, summaryFunction = twoClassSummary)
+rpartModel <- train(Survived ~ ., 
+                    data = train, 
+                    method = "rpart", 
+                    metric = "ROC",
+                    trControl = rpartCtrl, 
+                    tuneGrid = rpartParametersGrid)
+rpartModel
+```
 
+También podemos calcular la curva ROC para las predicciones del modelo sobre los datos de validación utilizando el paquete [<tt>pROC</tt>](https://web.expasy.org/pROC/). El paquete incluye dos funcionalidades principales: <tt>auc</tt> para crear la curva y <tt>plot.roc</tt> para visualizarla.
+
+El gráfico resultante muestra la curva ROC, el valor de corte para la probabilidad que optimiza el valor ROC y los valores de _specificity_ y _sensitivity_ resultantes.
+```{r}
 library(pROC)
 predictionValidationProb <- predict(rpartModel, val, type = "prob")
-auc <- roc(val$Survived, predictionValidationProb[["Yes"]], levels = unique(val[["Survived"]]))
-roc_validation <- plot.roc(auc, ylim=c(0,1), type = "S" , print.thres = T, main=paste('Validation AUC:', round(auc$auc[[1]], 2)))
+auc1 <- roc(val$Survived,                       # columna 'target' del conjunto de entrenamiento
+           predictionValidationProb[["Yes"]])  # columna de predicciones de la clase positiva como probabilidades
+roc_validation1 <- plot.roc(auc1, 
+                           ylim=c(0,1), 
+                           type = "S" , 
+                           print.thres = TRUE, 
+                           main=paste('Validation AUC:', round(auc1$auc[[1]], 2)))
 ```
-Y aplicar cross-validation:
+
+### Validación cruzada
+[<tt>caret</tt>](http://topepo.github.io/caret/) incorpora la posibilidad de aplicar cross-validation a través del objeto <tt>trainControl</tt> con <tt>method</tt> y especificando el número de particiones con <tt>number</tt>. En este ejemplo no hay diferencias de validación entre utilizar validación cruzada y no utilizarla, aunque normalmente sí las habrá.
 ```{r}
-rpartCtrl <- trainControl(verboseIter = T, classProbs = TRUE, summaryFunction = twoClassSummary, method = "cv", number = 10)
-rpartModel <- train(Survived ~ ., data = train, method = "rpart", metric = "ROC", trControl = rpartCtrl, tuneGrid = rpartParametersGrid)
-
+rpartCtrl <- trainControl(verboseIter = TRUE, classProbs = TRUE, summaryFunction = twoClassSummary, method = "cv", number = 10)
+rpartModel <- train(Survived ~ ., 
+                    data = train, 
+                    method = "rpart", 
+                    metric = "ROC", 
+                    trControl = rpartCtrl, 
+                    tuneGrid = rpartParametersGrid)
 predictionValidationProb <- predict(rpartModel, val, type = "prob")
-auc <- roc(val$Survived, predictionValidationProb[["Yes"]], levels = unique(val[["Survived"]]))
-roc_validation <- plot.roc(auc, ylim=c(0,1), type = "S" , print.thres = T, main=paste('Validation AUC:', round(auc$auc[[1]], 2)))
+auc2 <- roc(val$Survived, predictionValidationProb[["Yes"]])
+roc_validation2 <- plot.roc(auc2, 
+                           ylim=c(0,1), 
+                           type = "S" , 
+                           print.thres = TRUE, 
+                           main=paste('Validation AUC:', round(auc2$auc[[1]], 2)))
 ```
 
-Podemos utilizar otras técnicas, como Random Forest:
+## Otras técnicas
+Podemos utilizar otras técnicas, como Random Forest, siguiendo el mismo esquema. Si no especificamos un 'grid' se utilizarán los valores por defecto.
 ```{r}
 rfModel <- train(Survived ~ ., data = train, method = "rf", metric = "ROC", trControl = rpartCtrl)
 predictionValidationProb <- predict(rfModel, val, type = "prob")
-auc <- roc(val$Survived, predictionValidationProb[["Yes"]], levels = unique(val[["Survived"]]))
-roc_validation <- plot.roc(auc, ylim=c(0,1), type = "S" , print.thres = T, main=paste('Validation AUC:', round(auc$auc[[1]], 2)))
+auc3 <- roc(val$Survived, predictionValidationProb[["Yes"]], levels = unique(val[["Survived"]]))
+roc_validation3 <- plot.roc(auc3, ylim=c(0,1), type = "S" , print.thres = T, main=paste('Validation AUC:', round(auc3$auc[[1]], 2)))
+```
+
+Y comparar resultados...
+```{r}
+roc.test(roc_validation3, roc_validation2)
+
+plot.roc(auc2, type = "S", col="#1c61b6")
+lines.roc(auc3, type = "S", col="#008600")
 ```
 
 ## Valores perdidos
 Internamente, [<tt>rpart</tt>](https://cran.r-project.org/web/packages/rpart/vignettes/longintro.pdf) utiliza un procedimiento para estimar los valores perdidos. Otras técnicas se limitan a omitir las filas con valores perdidos, lo que significa perder muchos datos significativos. Es conveniente por tanto gestionar los valores perdidos de una forma más controlada.
+
 ### MissingDataGUI
 [MissingDataGUI](https://github.com/chxy/MissingDataGUI) es una herramienta para explorar y reparar valores perdidos. Si bien su interfaz gráfica puede facilitar la gestión, la falta de documentación la hacen difícil de utilizar.
 ```{r}
@@ -337,12 +408,14 @@ Internamente, [<tt>rpart</tt>](https://cran.r-project.org/web/packages/rpart/vig
 #        MissingDataGUI()
 # }
 ```
+
 ### VIM
 [VIM] facilita la visualización de la distribución de los valores perdidos. Puede utilizarse en combinación con [<tt>funModeling</tt>](https://livebook.datascienceheroes.com/exploratory-data-analysis.html#dataset-health-status).
 ```{r}
 library(VIM)
 # aggr(data_raw, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(data_raw), cex.axis=.7, gap=3, ylab=c("Histogram of missing data", "Pattern"))
 ```
+
 ### mice
 [MICE](https://www.r-bloggers.com/imputing-missing-data-with-r-mice-package/) es una de las bibliotecas más completas para realizar imputación de valores perdidos.
 ```{r}
@@ -355,7 +428,8 @@ complete(imputation)
 plot(imputation)
 stripplot(imputation, pch = 20, cex = 1.2)
 ```
-Podemos combinar <tt>mice</tt> y <tt>caret</tt> para crear modelos de predicción con varias imputaciones.
+
+Podemos combinar <tt>mice</tt> y [<tt>caret</tt>](http://topepo.github.io/caret/) para crear modelos de predicción con varias imputaciones.
 ```{r}
 ## Imputación resultado
 data_raw_imputation_1 <- 
@@ -391,6 +465,7 @@ train   <- data_raw_imputation_2[ trainIndex, ]
 val     <- data_raw_imputation_2[-trainIndex, ]
 rPartModel_2 <- train(Survived ~ Age + Pclass + Sex + Fare_Interval, data = data_raw_imputation_2, method = "rpart", metric = "ROC", trControl = rpartCtrl, tuneGrid = rpartParametersGrid)
 ```
+
 Y después seleccionar el que mejor ha funcionado, en entrenamiento o validación. (En este caso no hay diferencias porque los valores imputados en _Age_ son mínimos.)
 ```{r}
 # Comparación
@@ -400,6 +475,7 @@ cm_train_1 <- confusionMatrix(prediction_1, val[["Survived"]])
 prediction_2 <- predict(rPartModel_2, val, type = "raw") 
 cm_train_2 <- confusionMatrix(prediction_2, val[["Survived"]])
 ```
+
 ## Valores con ruido
 Para gestionar valores con ruido, utilizamos las herramientas incluidas en [<tt>NoiseFiltersR</tt>](https://cran.r-project.org/web/packages/NoiseFiltersR/index.html).
 ```{r}
