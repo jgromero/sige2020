@@ -1,0 +1,196 @@
+---
+title: "Reducción de datos con conjunto de datos Titanic"
+author: "Juan Gómez Romero"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(pROC)
+library(funModeling)
+library(rpart.plot)
+library(Hmisc)
+library(corrplot)
+
+set.seed(0)
+```
+
+Reducción de datos con el dataset [titanic](https://www.kaggle.com/c/titanic/).
+
+**En este cuaderno ampliaremos el código desarrollado en [titanic.Rmd](https://github.com/jgromero/sige2020/blob/master/Teor%C3%ADa/03%20Análisis%20predictivo/code/titanic.Rmd) para seleccionar automáticamente las variables que se utilizarán para construir el modelo de predicción.**
+
+Para ello, nos basaremos en la premisa de que diversos algoritmos de [<tt>caret</tt>](http://topepo.github.io/caret/) [ya incluyen procedimientos para selección de variables](https://topepo.github.io/caret/feature-selection-overview.html#builtin).
+
+**Índice**
+
+* [1. Preprocesamiento de datos](#1. Preprocesamiento de datos)
+* [2. Creación de modelo predictivo](#2. Creación de modelo predictivo)
+* [3. Importancia de las variables con modelo de predicción](#3. Importancia de las variables con modelo de predicción)
+* [4. Importancia de las variables sin modelo de predicción](#4. Importancia de las variables sin modelo de predicción)
+* [5. Entrenamiento del modelo con selección de variables](# 5. Entrenamiento del modelo con selección de variables)
+
+# 1. Preprocesamiento de datos
+Comenzamos leyendo el fichero de datos:
+```{r}
+library(tidyverse)
+data_raw <- read_csv('train.csv')
+head(data_raw)
+```
+
+A continuación, preprocesamos los datos para quedarnos con las variables que vamos a utilizar y recodificar la variable objetivo _Survived_. Las filas con valores NA se excluyen del proceso:
+```{r}
+# Datos con imputacion de valores perdidos
+data <-
+  data_raw %>%
+  mutate(Survived = as.factor(ifelse(Survived == 1, 'Yes', 'No'))) %>%
+  mutate(Pclass = as.factor(Pclass)) %>%
+  select(Survived, Pclass, Sex, Age, SibSp, Parch, Fare, Embarked) %>%
+  na.exclude()
+```
+
+#2. Creación de modelo predictivo
+Una vez están listos los datos, podemos crear un modelo predictivo que evalúa la importancia de las variables, como por ejemplo <tt>rpart</tt>.
+
+### Entrenamiento
+Creamos el modelo predictivo:
+```{r}
+# Parámetros
+rpartCtrl <- trainControl(verboseIter = F, classProbs = TRUE, summaryFunction = twoClassSummary)
+rpartParametersGrid <- expand.grid(.cp = c(0.01, 0.05))
+
+# Conjuntos de entrenamiento y validación
+trainIndex <- createDataPartition(data$Survived, p = .8, list = FALSE, times = 1)
+train <- data[trainIndex, ] 
+
+# Entrenamiento del modelo
+rpartModel <- train(Survived ~ ., 
+                    data = train, 
+                    method = "rpart", 
+                    metric = "ROC", 
+                    trControl = rpartCtrl, 
+                    tuneGrid = rpartParametersGrid)
+
+# Visualización del modelo
+rpart.plot(rpartModel$finalModel)
+```
+
+### Validación
+Obtenemos resultados con el conjunto de validación:
+```{r}
+# Predicciones con clases
+val        <- data[-trainIndex, ]
+prediction <- predict(rpartModel, val, type = "raw") 
+
+# Predicciones con probabilidades
+predictionValidationProb <- predict(rpartModel, val, type = "prob")
+```
+
+Y calculamos las métricas de calidad del clasificador (matriz de confusión y curva ROC):
+```{r}
+cm_train <- confusionMatrix(prediction, val[["Survived"]])
+cm_train
+
+auc <- roc(val$Survived, predictionValidationProb[["Yes"]], levels = unique(val[["Survived"]]))
+roc_validation <- plot.roc(auc, 
+                           ylim=c(0,1), 
+                           type = "S" , 
+                           print.thres = TRUE, 
+                           main=paste('Validation AUC:', round(auc$auc[[1]], 2)))
+```
+
+### Otros modelos de predicción
+Otro modelo de predicción que calcula importancia de variables es <tt>rf</tt>:
+```{r}
+rfModel <- train(Survived ~ ., data = train, method = "rf", metric = "ROC", trControl = rpartCtrl)
+predictionValidationProb <- predict(rfModel, val, type = "prob")
+auc <- roc(val$Survived, predictionValidationProb[["Yes"]], levels = unique(val[["Survived"]]))
+roc_validation <- plot.roc(auc, 
+                           ylim=c(0,1), 
+                           type = "S" , 
+                           print.thres = TRUE, 
+                           main=paste('Validation AUC:', round(auc$auc[[1]], 2)))
+```
+
+#3. Importancia de las variables con modelo de predicción
+Una vez que los modelos han sido entrenados, podemos estudiar la importancia que cada otorga a las variabales utilizando [<tt>varImp</tt>](https://topepo.github.io/caret/variable-importance.html) en [<tt>caret</tt>](http://topepo.github.io/caret/):
+
+```{r}
+varImp(rpartModel)
+varImp(rfModel)
+```
+
+El ranking obtenido puede servir para seleccionar las variables que se utilizarán para abordar el problema; por ejemplo aquellas con valor _Overall_ por encima de 25. Esta selección se puede automatizar parcialmente, ya que tanto <tt>rpart</tt> como <tt>rf</tt> usan variables 'dummy' (por ejemplo, _Sexmale_) que no están en el dataset original.
+
+```{r}
+important_vars <- varImp(rfModel)$importance %>%
+  rownames_to_column() %>%
+  filter(Overall > 25) %>%
+  select(rowname)
+```
+
+El orden de importancia se corresponden aproximadamente con el valor absoluto de correlación entre cada variable y la variable objetivo:
+```{r}
+# correlation_table(data, target='Survived')
+data_num <-
+  data %>%
+  mutate_if(is.character, as.factor) %>%
+  mutate_if(is.factor, as.numeric)
+cor(data_num)
+```
+
+Visualmente, podemos verlo como tabla de correlación o como mapa de calor:
+```{r}
+rcorr(as.matrix(data_num))
+corrplot(cor(data_num), type = "upper", diag = F, order = "hclust", tl.col = "black", tl.srt = 45)
+heatmap(x = cor(data_num), symm = TRUE)
+```
+
+# 4. Importancia de las variables sin modelo de predicción
+También se puede conocer la importancia de las variables sin crear explícitamente un modelo de predicción, sino simplemente calculando los mismos parámetros que se utilizan para aprender los modelos. Por ejemplo, los modelos de árboles utilizan la ganancia de información o la entropía para decidir sobre qué variables ramificar. Con [var_rank_info](https://www.rdocumentation.org/packages/funModeling/versions/1.9.3/topics/var_rank_info) podemos estimar varios estos valores directamente:
+
+* en: entropy measured in bits
+* mi: mutual information
+* ig: information gain
+* gr: gain ratio
+
+```{r}
+var_rank_info(data, "Survived")
+```
+
+# 5. Entrenamiento del modelo con selección de variables
+Una vez determinadas las variables importantes, podemos entrenar el modelo seleccionando solamente con estas:
+```{r}
+# Datos de entrenamiento
+data_reduced <-
+  data %>%
+  select(Survived, Sex, Fare, Age, Pclass, SibSp)
+head(data_reduced)
+
+train <- data_reduced[trainIndex, ] 
+val   <- data_reduced[-trainIndex, ]
+
+# rpart
+rpartModel_2 <- train(Survived ~ ., data = train, method = "rpart", metric = "ROC", trControl = rpartCtrl, tuneGrid = rpartParametersGrid)
+predictionValidationProb <- predict(rpartModel_2, val, type = "prob")
+auc <- roc(val$Survived, predictionValidationProb[["Yes"]], levels = unique(val[["Survived"]]))
+auc
+
+# rf
+rfModel_2 <- train(Survived ~ ., data = train, method = "rf", metric = "ROC", trControl = rpartCtrl)
+predictionValidationProb <- predict(rfModel_2, val, type = "prob")
+auc <- roc(val$Survived, predictionValidationProb[["Yes"]], levels = unique(val[["Survived"]]))
+auc
+```
+
+<script type="text/javascript">
+  <!-- https://stackoverflow.com/questions/39281266/use-internal-links-in-rmarkdown-html-output/39293457 -->
+  // When the document is fully rendered...
+  $(document).ready(function() {
+    // ...select all header elements...
+    $('h1, h2, h3, h4, h5').each(function() {
+      // ...and add an id to them corresponding to their 'titles'
+      $(this).attr('id', $(this).html());
+    });
+  });
+</script>
