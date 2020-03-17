@@ -1,0 +1,146 @@
+---
+title: "Tratamiento de valores perdidos con conjunto de datos Titanic"
+author: "Juan Gómez Romero"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Tratamiento de valores perdidos con el dataset [titanic](https://www.kaggle.com/c/titanic/).
+
+**En este cuaderno ampliaremos el código desarrollado en [titanic.Rmd](https://github.com/jgromero/sige2020/blob/master/Teor%C3%ADa/03%20Análisis%20predictivo/code/titanic.Rmd) para tratar los valores perdidos de formas más sofisticadas.**
+
+Internamente, [<tt>rpart</tt>](https://cran.r-project.org/web/packages/rpart/vignettes/longintro.pdf) utiliza un procedimiento para estimar los valores perdidos. Otras técnicas se limitan a omitir las filas con valores perdidos, lo que significa perder muchos datos significativos. Es conveniente por tanto gestionar los valores perdidos de una forma más controlada.
+
+**Índice**
+
+* [1. MissingDataGUI](#1. MissingDataGUI)
+* [2. VIM](#2. VIM)
+* [3. MICE](#3. MICE)
+* [4. NoiseFiltersR](#4. NoiseFiltersR)
+
+# 0. Preprocesamiento de datos
+Comenzamos leyendo el fichero de datos:
+```{r}
+library(tidyverse)
+data_raw <- read_csv('train.csv')
+head(data_raw)
+```
+
+#1. MissingDataGUI
+[MissingDataGUI](https://github.com/chxy/MissingDataGUI) es una herramienta para explorar y reparar valores perdidos. Si bien su interfaz gráfica puede facilitar la gestión, la falta de documentación la hacen difícil de utilizar.
+```{r}
+# library(MissingDataGUI)
+# if (interactive()) {
+#        MissingDataGUI()
+# }
+```
+
+#2. VIM
+[VIM](https://cran.r-project.org/web/packages/VIM/index.html) facilita la visualización de la distribución de los valores perdidos. Puede utilizarse en combinación con [<tt>funModeling</tt>](https://livebook.datascienceheroes.com/exploratory-data-analysis.html#dataset-health-status).
+```{r}
+# library(VIM)
+# aggr(data_raw, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(data_raw), cex.axis=.7, gap=3, ylab=c("Histogram of missing data", "Pattern"))
+```
+
+#3. MICE
+[MICE](https://www.r-bloggers.com/imputing-missing-data-with-r-mice-package/) es una de las bibliotecas más completas para realizar imputación de valores perdidos.
+
+En el conjunto de datos existen valores perdidos en: 'Cabin', 'Age', 'Embarked'. Con [MICE](https://www.r-bloggers.com/imputing-missing-data-with-r-mice-package/) podemos crear un modelo de imputación que emplee diferentes técnicas para cada columna. Con <tt>complete</tt> obtenemos el resultado de la imputación de acuerdo al modelo generado.
+```{r}
+library(mice)
+imputation <- mice(data_raw, method = c("", "", "", "", "", "mean", "", "", "", "", "cart", "cart"))
+
+imputation
+complete(imputation)
+plot(imputation)
+stripplot(imputation, pch = 20, cex = 1.2)
+```
+
+Podemos combinar <tt>mice</tt> y [<tt>caret</tt>](http://topepo.github.io/caret/) para crear manualmente modelos de predicción con varias imputaciones:
+```{r}
+library(caret)
+
+# Particiones de datos y parametros generales
+trainIndex <- createDataPartition(data_raw$Survived, p = .8, list = FALSE, times = 1)
+rpartCtrl <- trainControl(verboseIter = F, classProbs = TRUE, summaryFunction = twoClassSummary)
+rpartParametersGrid <- expand.grid(.cp = c(0.01, 0.05))
+
+# Imputación resultado
+data_raw_imputation_1 <- 
+  complete(imputation) %>%
+  mutate(Survived = as.factor(ifelse(Survived == 1, 'Yes', 'No'))) %>%
+  mutate(Pclass = as.factor(Pclass)) %>%
+  mutate(Fare_Interval = as.factor(
+    case_when(
+      Fare >= 30 ~ 'More.than.30',
+      Fare >= 20 & Fare < 30 ~ 'Between.20.30',
+      Fare < 20 & Fare >= 10 ~ 'Between.10.20',
+      Fare < 10 ~ 'Less.than.10'))) %>%
+  select(Survived, Age, Pclass, Sex, Fare_Interval)
+
+# Entrenar modelo 1
+train   <- data_raw_imputation_1[ trainIndex, ] 
+val     <- data_raw_imputation_1[-trainIndex, ]
+rPartModel_1 <- train(Survived ~ Age + Pclass + Sex + Fare_Interval, data = data_raw_imputation_1, method = "rpart", metric = "ROC", trControl = rpartCtrl, tuneGrid = rpartParametersGrid)
+
+## Imputación alternativa
+data_raw_imputation_2 <- 
+  complete(imputation, 2) %>%  # se selecciona la alternativa 2 de imputación
+  mutate(Survived = as.factor(ifelse(Survived == 1, 'Yes', 'No'))) %>%
+  mutate(Pclass = as.factor(Pclass)) %>%
+  mutate(Fare_Interval = as.factor(
+    case_when(
+      Fare >= 30 ~ 'More.than.30',
+      Fare >= 20 & Fare < 30 ~ 'Between.20.30',
+      Fare < 20 & Fare >= 10 ~ 'Between.10.20',
+      Fare < 10 ~ 'Less.than.10'))) %>%
+  select(Survived, Age, Pclass, Sex, Fare_Interval)
+
+# Entrenar modelo 2
+train   <- data_raw_imputation_2[ trainIndex, ] 
+val     <- data_raw_imputation_2[-trainIndex, ]
+rPartModel_2 <- train(Survived ~ Age + Pclass + Sex + Fare_Interval, data = data_raw_imputation_2, method = "rpart", metric = "ROC", trControl = rpartCtrl, tuneGrid = rpartParametersGrid)
+```
+
+Y después seleccionar el que mejor ha funcionado, en entrenamiento o validación. (En este caso no hay diferencias porque ambas imputaciones son prácticamente idénticas.)
+```{r}
+# Comparación
+prediction_1 <- predict(rPartModel_1, val, type = "raw") 
+(cm_train_1 <- confusionMatrix(prediction_1, val[["Survived"]]))
+
+prediction_2 <- predict(rPartModel_2, val, type = "raw") 
+(cm_train_2 <- confusionMatrix(prediction_2, val[["Survived"]]))
+```
+
+# 4. NoiseFiltersR
+Para gestionar valores con ruido, utilizamos las herramientas incluidas en [<tt>NoiseFiltersR</tt>](https://cran.r-project.org/web/packages/NoiseFiltersR/index.html).
+```{r}
+# Instalar RWeka (http://stackoverflow.com/a/36173681)
+library(NoiseFiltersR)
+data <- data_raw %>% 
+  mutate(Survived = as.factor(Survived)) %>%
+  mutate(Pclass = as.factor(Pclass))   %>%
+  mutate(Age = as.factor(Age))      %>%
+  mutate(Sex = as.factor(Sex))      %>%
+  select(Pclass, Survived, Age, Sex)
+
+noise_filter <- AENN(Survived ~., data)
+summary(noise_filter)
+identical(noise_filter$cleanData, data[setdiff(1:nrow(data), noise_filter$remIdx), ])
+```
+
+
+<script type="text/javascript">
+  <!-- https://stackoverflow.com/questions/39281266/use-internal-links-in-rmarkdown-html-output/39293457 -->
+  // When the document is fully rendered...
+  $(document).ready(function() {
+    // ...select all header elements...
+    $('h1, h2, h3, h4, h5').each(function() {
+      // ...and add an id to them corresponding to their 'titles'
+      $(this).attr('id', $(this).html());
+    });
+  });
+</script>
