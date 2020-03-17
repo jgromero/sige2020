@@ -20,7 +20,7 @@ Reducción de datos con el dataset [titanic](https://www.kaggle.com/c/titanic/).
 
 **En este cuaderno ampliaremos el código desarrollado en [titanic.Rmd](https://github.com/jgromero/sige2020/blob/master/Teor%C3%ADa/03%20Análisis%20predictivo/code/titanic.Rmd) para seleccionar automáticamente las variables que se utilizarán para construir el modelo de predicción.**
 
-Para ello, nos basaremos en la premisa de que diversos algoritmos de [<tt>caret</tt>](http://topepo.github.io/caret/) [ya incluyen procedimientos para selección de variables](https://topepo.github.io/caret/feature-selection-overview.html#builtin).
+Para ello, nos basaremos en la premisa de que diversos algoritmos de [<tt>caret</tt>](http://topepo.github.io/caret/) [ya incluyen procedimientos para selección de variables](https://topepo.github.io/caret/feature-selection-overview.html#builtin). Para un ejemplo detallado basado en uso de correlaciones entre variables, ver [aquí](https://github.com/jgromero/sige2020/tree/master/Pr%C3%A1cticas/01%20Selecci%C3%B3n%20de%20variables).
 
 **Índice**
 
