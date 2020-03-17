@@ -5,6 +5,6 @@ Repositorio con materiales de la asignatura [SIGE](http://masteres.ugr.es/ing-in
 
 <hr/>
 
-Dr. Juan Gómez Romero [[web]](http://decsai.ugr.es/~jgomez)
-Departamento de Ciencias de la Computación e Inteligencia Artificial
-Universidad de Granada
+Dr. Juan Gómez Romero [[web]](http://decsai.ugr.es/~jgomez) </br>
+Departamento de Ciencias de la Computación e Inteligencia Artificial </br>
+Universidad de Granada </br>
