@@ -210,6 +210,15 @@ $(document).ready(function () {
 <li>‘Current’</li>
 </ul></li>
 </ul>
+<p><strong>Índice</strong></p>
+<ul>
+<li><a href="#1.%20Lectura%20de%20datos">1. Lectura de datos</a></li>
+<li><a href="#2.%20Eliminar%20columnos%20no%20útiles">2. Eliminar columnos no útiles</a></li>
+<li><a href="#3.%20Eliminar%20filas%20no%20útiles">3. Eliminar filas no útiles</a></li>
+<li><a href="#4.%20Recodificar%20valores%20de%20clase%20objetivo">4. Recodificar valores de clase objetivo</a></li>
+<li><a href="#5.%20Identificar%20columnos%20según%20correlación">5. Identificar columnos según correlación</a></li>
+<li><a href="#6.%20Guardar%20fichero">6. Guardar fichero</a></li>
+</ul>
 <div id="lectura-de-datos" class="section level1">
 <h1>1. Lectura de datos</h1>
 <p>Comenzamos leyendo los datos disponibles. Podemos utilizar <em>n_max</em> para limitar la cantidad de filas con las que queremos trabajar y especificar con <em>na</em> qué valores queremos que se codifiquen como valores perdidos de R.</p>
@@ -839,8 +848,8 @@ data &lt;- data_raw %&gt;%
              'Charged Off', 
              'Current'))</code></pre>
 </div>
-<div id="recodificar-valores-de-clase-objetivo-loan_status" class="section level1">
-<h1>4. Recodificar valores de clase objetivo ‘loan_status’</h1>
+<div id="recodificar-valores-de-clase-objetivo" class="section level1">
+<h1>4. Recodificar valores de clase objetivo</h1>
 <p>Vamos a convertir el problema en una clasificación binaria recodificando los valores de ‘loan_status’ a dos categorías: <em>Paid</em>, <em>Unpaid</em>. La clase mayoritaria es <em>Paid</em> y consideraremos “clase positiva” a <em>Unpaid</em> (los casos interesantes de detectar son aquellos en que no se paga el préstamo).</p>
 <pre class="r"><code>ggplot(data) +
   geom_histogram(aes(x = loan_status, fill = loan_status), stat = 'count')</code></pre>
@@ -985,6 +994,17 @@ rcorr_result &lt;- rcorr(as.matrix(data_num))</code></pre>
 ## 25    668</code></pre>
 <pre class="r"><code>write_csv(data, 'LoanStats_2017Q4-SelVar.csv')</code></pre>
 <p>El fichero final ya sí puede utilizarse para construir un modelo de predicción utilizando <a href="http://topepo.github.io/caret/"><tt>caret</tt></a>.</p>
+<script type="text/javascript">
+  <!-- https://stackoverflow.com/questions/39281266/use-internal-links-in-rmarkdown-html-output/39293457 -->
+  // When the document is fully rendered...
+  $(document).ready(function() {
+    // ...select all header elements...
+    $('h1, h2, h3, h4, h5').each(function() {
+      // ...and add an id to them corresponding to their 'titles'
+      $(this).attr('id', $(this).html());
+    });
+  });
+</script>
 </div>
 
 

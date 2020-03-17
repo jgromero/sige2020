@@ -16,6 +16,15 @@ Selección de variables con el dataset [Lending Club](https://www.lendingclub.co
 * Pagado ('Paid')
     + 'Current'
 
+**Índice**
+
+* [1. Lectura de datos](#1. Lectura de datos)
+* [2. Eliminar columnos no útiles](#2. Eliminar columnos no útiles)
+* [3. Eliminar filas no útiles](#3. Eliminar filas no útiles)
+* [4. Recodificar valores de clase objetivo](#4. Recodificar valores de clase objetivo)
+* [5. Identificar columnos según correlación](#5. Identificar columnos según correlación)
+* [6. Guardar fichero](#6. Guardar fichero)
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
@@ -118,7 +127,7 @@ data <- data %>%
              'Current'))
 ```
 
-# 4. Recodificar valores de clase objetivo 'loan_status'
+# 4. Recodificar valores de clase objetivo
 Vamos a convertir el problema en una clasificación binaria recodificando los valores de 'loan_status' a dos categorías: _Paid_, _Unpaid_. La clase mayoritaria es _Paid_ y consideraremos "clase positiva" a _Unpaid_ (los casos interesantes de detectar son aquellos en que no se paga el préstamo).
 ```{r}
 ggplot(data) +
@@ -232,3 +241,15 @@ write_csv(data, 'LoanStats_2017Q4-SelVar.csv')
 ```
 
 El fichero final ya sí puede utilizarse para construir un modelo de predicción utilizando [<tt>caret</tt>](http://topepo.github.io/caret/).
+
+<script type="text/javascript">
+  <!-- https://stackoverflow.com/questions/39281266/use-internal-links-in-rmarkdown-html-output/39293457 -->
+  // When the document is fully rendered...
+  $(document).ready(function() {
+    // ...select all header elements...
+    $('h1, h2, h3, h4, h5').each(function() {
+      // ...and add an id to them corresponding to their 'titles'
+      $(this).attr('id', $(this).html());
+    });
+  });
+</script>
