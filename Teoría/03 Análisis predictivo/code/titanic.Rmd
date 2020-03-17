@@ -23,8 +23,6 @@ En primer lugar, nos centraremos en el pre-procesamiento de los datos utilizando
 * [Predictor refinado: todos los hombres mueren](#Predictor refinado: todos los hombres mueren)
 * [Predictor refinado: todos los hombres mueren, las mujeres en 3ª clase que pagan igual o más de 20 mueren](#Predictor refinado: todos los hombres mueren, las mujeres en 3ª clase que pagan igual o más de 20 mueren)
 * [Predicción automática](#Predicción automática)
-* [Valores perdidos](#Valores perdidos)
-* [Valores con ruido](#Valores con ruido)
 
 ## Lectura de datos 
 Comenzaremos utilizando el fichero [_train.csv_](https://www.kaggle.com/c/titanic/data) de Kaggle, donde encontramos los datos de 891 pasajeros y que utilizaremos para crear nuestro modelo de predicción.
@@ -397,101 +395,6 @@ plot.roc(auc2, type = "S", col="#1c61b6")
 lines.roc(auc3, type = "S", col="#008600")
 ```
 
-## Valores perdidos
-Internamente, [<tt>rpart</tt>](https://cran.r-project.org/web/packages/rpart/vignettes/longintro.pdf) utiliza un procedimiento para estimar los valores perdidos. Otras técnicas se limitan a omitir las filas con valores perdidos, lo que significa perder muchos datos significativos. Es conveniente por tanto gestionar los valores perdidos de una forma más controlada.
-
-### MissingDataGUI
-[MissingDataGUI](https://github.com/chxy/MissingDataGUI) es una herramienta para explorar y reparar valores perdidos. Si bien su interfaz gráfica puede facilitar la gestión, la falta de documentación la hacen difícil de utilizar.
-```{r}
-# library(MissingDataGUI)
-# if (interactive()) {
-#        MissingDataGUI()
-# }
-```
-
-### VIM
-[VIM] facilita la visualización de la distribución de los valores perdidos. Puede utilizarse en combinación con [<tt>funModeling</tt>](https://livebook.datascienceheroes.com/exploratory-data-analysis.html#dataset-health-status).
-```{r}
-library(VIM)
-# aggr(data_raw, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(data_raw), cex.axis=.7, gap=3, ylab=c("Histogram of missing data", "Pattern"))
-```
-
-### mice
-[MICE](https://www.r-bloggers.com/imputing-missing-data-with-r-mice-package/) es una de las bibliotecas más completas para realizar imputación de valores perdidos.
-```{r}
-library(mice)
-colnames(data_raw) # valores perdidos: Cabin, Age, Embarked
-imputation <- mice(data_raw, method = c("", "", "", "", "", "mean", "", "", "", "", "cart", "cart"))
-
-imputation
-complete(imputation)
-plot(imputation)
-stripplot(imputation, pch = 20, cex = 1.2)
-```
-
-Podemos combinar <tt>mice</tt> y [<tt>caret</tt>](http://topepo.github.io/caret/) para crear modelos de predicción con varias imputaciones.
-```{r}
-## Imputación resultado
-data_raw_imputation_1 <- 
-  complete(imputation) %>%
-  mutate(Survived = as.factor(ifelse(Survived == 1, 'Yes', 'No'))) %>%
-  mutate(Pclass = as.factor(Pclass)) %>%
-  mutate(Fare_Interval = as.factor(
-    case_when(
-      Fare >= 30 ~ 'More.than.30',
-      Fare >= 20 & Fare < 30 ~ 'Between.20.30',
-      Fare < 20 & Fare >= 10 ~ 'Between.10.20',
-      Fare < 10 ~ 'Less.than.10'))) %>%
-  select(Survived, Age, Pclass, Sex, Fare_Interval)
-  
-train   <- data_raw_imputation_1[ trainIndex, ] 
-val     <- data_raw_imputation_1[-trainIndex, ]
-rPartModel_1 <- train(Survived ~ Age + Pclass + Sex + Fare_Interval, data = data_raw_imputation_1, method = "rpart", metric = "ROC", trControl = rpartCtrl, tuneGrid = rpartParametersGrid)
-
-## Imputación alternativa 1
-data_raw_imputation_2 <- 
-  complete(imputation, 2) %>%
-  mutate(Survived = as.factor(ifelse(Survived == 1, 'Yes', 'No'))) %>%
-  mutate(Pclass = as.factor(Pclass)) %>%
-  mutate(Fare_Interval = as.factor(
-    case_when(
-      Fare >= 30 ~ 'More.than.30',
-      Fare >= 20 & Fare < 30 ~ 'Between.20.30',
-      Fare < 20 & Fare >= 10 ~ 'Between.10.20',
-      Fare < 10 ~ 'Less.than.10'))) %>%
-  select(Survived, Age, Pclass, Sex, Fare_Interval)
-
-train   <- data_raw_imputation_2[ trainIndex, ] 
-val     <- data_raw_imputation_2[-trainIndex, ]
-rPartModel_2 <- train(Survived ~ Age + Pclass + Sex + Fare_Interval, data = data_raw_imputation_2, method = "rpart", metric = "ROC", trControl = rpartCtrl, tuneGrid = rpartParametersGrid)
-```
-
-Y después seleccionar el que mejor ha funcionado, en entrenamiento o validación. (En este caso no hay diferencias porque los valores imputados en _Age_ son mínimos.)
-```{r}
-# Comparación
-prediction_1 <- predict(rPartModel_1, val, type = "raw") 
-cm_train_1 <- confusionMatrix(prediction_1, val[["Survived"]])
-
-prediction_2 <- predict(rPartModel_2, val, type = "raw") 
-cm_train_2 <- confusionMatrix(prediction_2, val[["Survived"]])
-```
-
-## Valores con ruido
-Para gestionar valores con ruido, utilizamos las herramientas incluidas en [<tt>NoiseFiltersR</tt>](https://cran.r-project.org/web/packages/NoiseFiltersR/index.html).
-```{r}
-# Instalar RWeka (http://stackoverflow.com/a/36173681)
-library(NoiseFiltersR)
-data <- data_raw %>% 
-  mutate(Survived = as.factor(Survived)) %>%
-  mutate(Pclass = as.factor(Pclass))   %>%
-  mutate(Age = as.factor(Age))      %>%
-  mutate(Sex = as.factor(Sex))      %>%
-  select(Pclass, Survived, Age, Sex)
-
-noise_filter <- AENN(Survived ~., data)
-summary(noise_filter)
-identical(noise_filter$cleanData, data[setdiff(1:nrow(data), noise_filter$remIdx), ])
-```
 <script type="text/javascript">
   <!-- https://stackoverflow.com/questions/39281266/use-internal-links-in-rmarkdown-html-output/39293457 -->
   // When the document is fully rendered...
