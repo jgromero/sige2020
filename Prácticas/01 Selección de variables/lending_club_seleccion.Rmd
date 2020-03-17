@@ -1,0 +1,234 @@
+---
+title: "Selección de variables con conjunto de datos LendingClub"
+author: "Juan Gómez Romero"
+output: html_document
+---
+
+Selección de variables con el dataset [Lending Club](https://www.lendingclub.com/info/download-data.action).
+
+[Lending Club](https://www.lendingclub.com/) es una financiera p2p (_peer to peer_) que ofrece información anonimizada sobre sus clientes. En este ejemplo utilizaremos un conjunto de datos sobre los préstamos (_loans_) vigentes en el último trimestre de 2017. El objetivo final es construir un modelo que prediga el estado de un préstamo (<tt>loan status</tt>) a partir del resto de variables. Se consideran los siguientes estados: 
+
+* No pagado ('Unpaid') 
+    + 'Late (16-30 days)'
+    + 'Late (31-120 days)'
+    + 'In Grace Period'
+    + 'Charged Off'
+* Pagado ('Paid')
+    + 'Current'
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(funModeling)
+library(ggplot2)
+library(Hmisc)
+library(corrplot)
+
+set.seed(1)
+```
+
+# 1. Lectura de datos
+Comenzamos leyendo los datos disponibles. Podemos utilizar _n\_max_ para limitar la cantidad de filas con las que queremos trabajar y especificar con _na_ qué valores queremos que se codifiquen como valores perdidos de R.
+
+```{r}
+data_raw <- read_csv('LoanStats_2017Q4.csv', na = c('NA', 'n/a', '', ' '))  # n_max = 10000
+```
+
+```{r}
+head(data_raw)
+status <- df_status(data_raw)
+```
+
+# 2. Eliminar columnos no útiles
+A continuación vamos a eliminar las columnas que no son útiles. Consideramos columnas no útiles las siguientes:
+
+* Columnas con más del 90% de los valores a 0
+* Columnas con más del 50% de los valores a NA
+* Identificar columnas con <= 3 valores diferentes
+* Identificar columnas >75% valores diferentes
+
+Obviamente, esta selección es bastante tosca. Convendría justificar estas decisiones a partir de la semántica de las columnas.
+
+Para ello, trabajaremos con la tabla _status_, que incluye una fila por cada variable y varias columnas especificando número y proporción de 0, NA, valores únicos, etc. Tomaremos de esta tabla los nombres de variables (columna _variable_) que cumplen determinados requisitos y después crearemos una lista (variable _remove\_cols_), que se utiliará para borrar columnas. El resultado se guardará en _data_. No queremos eliminar 'loan_status', así que comenzaremos por excluirla de la tabla.
+
+Excluir 'loan_status' de la tabla _status_:
+```{r}
+status <- status %>% 
+  filter(variable != 'loan_status')
+```
+
+Identificar columnas con más del 90% de los valores a 0:
+```{r}
+zero_cols <- status %>%
+  filter(p_zeros > 90) %>%
+  select(variable)
+```
+
+Identificar columnas con más del 50% de los valores a NA:
+```{r}
+na_cols <- status %>%
+  filter(p_na > 50) %>%
+  select(variable)
+```
+
+Identificar columnas con <= 3 valores diferentes:
+```{r}
+eq_cols <- status %>%
+  filter(unique <= 3) %>%
+  select(variable)
+```
+
+Identificar columnas >75% valores diferentes:
+```{r}
+dif_cols <- status %>%
+  filter(unique > 0.75 * nrow(data_raw)) %>%
+  select(variable)
+```
+
+Eliminar columnas excluidas:
+```{r}
+remove_cols <- bind_rows(
+  list(
+    zero_cols,
+    na_cols,
+    eq_cols,
+    dif_cols
+  )
+)
+
+data <- data_raw %>%
+  select(-one_of(remove_cols$variable))
+```
+
+```{r}
+head(data)
+df_status(data)
+```
+
+# 3. Eliminar filas no útiles
+A continuación, extraemos de _data_ las filas con valores de _status_ que nos interesan. Para ello, utilizamos _select_ con el operador _%in_:
+```{r}
+data <- data %>%
+  filter(loan_status 
+         %in% 
+           c('Late (16-30 days)', 
+             'Late (31-120 days)', 
+             'In Grace Period', 
+             'Charged Off', 
+             'Current'))
+```
+
+# 4. Recodificar valores de clase objetivo 'loan_status'
+Vamos a convertir el problema en una clasificación binaria recodificando los valores de 'loan_status' a dos categorías: _Paid_, _Unpaid_. La clase mayoritaria es _Paid_ y consideraremos "clase positiva" a _Unpaid_ (los casos interesantes de detectar son aquellos en que no se paga el préstamo).
+```{r}
+ggplot(data) +
+  geom_histogram(aes(x = loan_status, fill = loan_status), stat = 'count')
+```
+
+```{r}
+data <- data %>%
+  mutate(loan_status = case_when(
+    loan_status == 'Late (16-30 days)'  ~ 'Unpaid',
+    loan_status == 'Late (31-120 days)' ~ 'Unpaid',
+    loan_status == 'In Grace Period'    ~ 'Unpaid',
+    loan_status == 'Charged Off'        ~ 'Unpaid',
+    loan_status == 'Current'            ~ 'Paid'))
+```
+
+```{r}
+ggplot(data) +
+  geom_histogram(aes(x = loan_status, fill = loan_status), stat = 'count')
+```
+
+# 5. Identificar columnos según correlación
+Vamos a continuar seleccionando columnas. Comenzaremos seleccionando las columnas que tienen una alta correlación con la variable objetivo 'loan_status' y, por tanto, son interesantes (son buenos predictores de su comportamiento). Continuaremos estudiante las columnas que tienen una alta correlación entre sí y, por tanto, solo nos interesa una de ellas (todas aportan la misma información).
+
+## 5.1 Alta correlacion con la variable objetivo
+Construimos una tabla de correlación de las variables con respecto a 'loan_status'. Por defecto no dará error, ya que es necesario imputar valores perdidos y convertir las cadenas a valores de categorías codificadas con números.
+
+```{r}
+# correlation_table(data, target='loan_status')
+```
+
+Para ello, eliminamos las filas con NAs usando _na.exclude()_ y convertimos las cadenas a _factor_ + los _factor_ a números:
+```{r}
+data_num <- data %>%
+  na.exclude() %>%
+  mutate_if(is.character, as.factor) %>%
+  mutate_if(is.factor, as.numeric)
+```
+
+Ahora sí podemos calcular la correlación:
+```{r}
+cor_target <- correlation_table(data_num, target='loan_status')
+```
+
+Y quedarnos solo con las variables que tienen una correlación por encima del 0.01 (en valor absoluto):
+```{r}
+important_vars <- cor_target %>% 
+  filter(abs(loan_status) >= 0.01)
+
+data <- data %>%
+  select(one_of(important_vars$Variable))
+```
+
+## 5.2 Alta correlación entre sí
+Construirmos una tabla de correlación con todas las variables utilizando _rcorr_. Al igual que en el caso anterior, es necesario eliminar filas con valores NA y convertir las cadenas a valores numéricos.
+```{r}
+data_num <- data %>%
+  na.exclude() %>%
+  mutate_if(is.character, as.factor) %>%
+  mutate_if(is.factor, as.numeric)
+rcorr_result <- rcorr(as.matrix(data_num))
+```
+
+Para visualizar la matriz de correlación, utilizamos _corrplot_ (previa transformación a _tibble_):
+```{r}
+cor_matrix <- as.tibble(rcorr_result$r, rownames = "variable")
+corrplot(rcorr_result$r, type = "upper", order = "original", tl.col = "black", tl.srt = 45)
+```
+
+Se puede observar que hay varias variables con alto índice de correlación; en concreto: 'open_rv_24m', 'acc_open_past_24mths', 'open_il_24m', 'total_rec_prncp', 'total_pymnt', 'total_pymnt_inv', 'grade'.
+
+Vamos a agrupar las variables según el valor de correlación entre ellas ([coeficiente de Pearson](https://es.wikipedia.org/wiki/Coeficiente_de_correlaci%C3%B3n_de_Pearson)). Utilizaremos _varclus_, que crea un cluster jearárquico a partir de la similitud entre variables calculada a partir de la medida especificada:
+
+```{r}
+v <- varclus(as.matrix(data_num), similarity="pearson") 
+```
+
+Podemos visualizar el cluster creado:
+```{r}
+plot(v)
+```
+
+Para quedarnos con las variables representativas, cortaremos el árbol de agrupaciones a una determinada altura para obtener los clusteres a esa altura. Esto se puede hacer especificando un valor de la medida de similitud (_Pearson_) o indicando el número de clusteres que queremos (dejando que la función interprete cómo debe realizar el corte). Utilizando la segunda opción podemos obtener 25 grupos:
+```{r}
+groups <- cutree(v$hclust, 25)
+```
+
+Finalmente, nos quedamos con una variable representativa de cada grupo, que será la que seleccionemos para el análisis. Para ello, hacemos un _group\_by_ por número de cluster asignado y seleccionamos una instancia con _sample\_n_:
+
+```{r}
+not_correlated_vars <- enframe(groups) %>% 
+  group_by(value) %>% 
+  sample_n(1)
+```
+
+Y retenemos en _data_ las variables elegidas:
+```{r}
+data <- data %>%
+  select(one_of(not_correlated_vars$name))
+```
+
+# 6. Guardar fichero
+Para terminar, guardamos los datos después de selección de variables:
+```{r}
+head(data)
+df_status(data)
+```
+
+```{r}
+write_csv(data, 'LoanStats_2017Q4-SelVar.csv')
+```
+
+El fichero final ya sí puede utilizarse para construir un modelo de predicción utilizando [<tt>caret</tt>](http://topepo.github.io/caret/).
