@@ -1,0 +1,172 @@
+---
+title: "Discretización de valores numéricos con conjunto de datos Titanic"
+author: "Juan Gómez Romero"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Discretización de valores numéricos con el dataset [titanic](https://www.kaggle.com/c/titanic/).
+
+**En este cuaderno ampliaremos el código desarrollado en [titanic.Rmd](https://github.com/jgromero/sige2020/blob/master/Teor%C3%ADa/03%20Análisis%20predictivo/code/titanic.Rmd) para discretizar manual y automáticamente los valores de varias variables.**
+
+Internamente, [<tt>rpart</tt>](https://cran.r-project.org/web/packages/rpart/vignettes/longintro.pdf) utiliza un procedimiento para discretizar los valores numéricos. En este ejemplo realizaremos parte de esa discretización de manera controlada.
+
+* [1. Discretización manual](#1. Discretización manual)
+* [2. Discretización automática](#2. Discretización automática)
+
+#0. Preprocesamiento de datos
+Comenzamos leyendo el fichero de datos:
+```{r}
+library(tidyverse)
+data_raw <- read_csv('train.csv')
+head(data_raw)
+```
+
+#1. Discretización manual
+En primer lugar, creamos manualmente intervalos para las variables 'Fare' y 'Age'.
+
+```{r}
+data_disc <-
+  data_raw %>%
+  mutate(Survived = as.factor(ifelse(Survived == 1, 'Yes', 'No'))) %>%
+  mutate(Fare_Interval = case_when(
+    Fare >= 30 ~ 'More.than.30',
+    Fare >= 20 & Fare < 30 ~ 'Between.20.30',
+    Fare < 20  & Fare >= 10 ~ 'Between.10.20',
+    Fare < 10 ~ 'Less.than.10')) %>%
+  mutate(Age_Interval = case_when(
+    Age <= 18 ~ 'Less.than.18',
+    Age > 18 & Age <= 35 ~ 'Between.18.35',
+    Age > 35 & Age <= 55 ~ 'Between.35.55',
+    Age > 55 ~ 'More.than.55')) %>%
+  select(Survived, Sex, Fare_Interval, Age_Interval, Pclass, SibSp) %>%
+  na.exclude()
+```
+
+A continuación, comprobamos si la discretización ha sido efectiva aprendiendo un modelo de clasificación y comparándolo con el que se obtendría sin discretizar.
+
+```{r}
+library(caret)
+library(pROC)
+set.seed(0)
+
+# Particiones de datos y parametros generales
+trainIndex       <- createDataPartition(data_disc$Survived, p = .7, list = FALSE, times = 1)
+rfCtrl           <- trainControl(verboseIter = F, classProbs = TRUE, summaryFunction = twoClassSummary)
+```
+
+Sin discretizar:
+```{r}
+data <-
+  data_raw %>%
+  mutate(Survived = as.factor(ifelse(Survived == 1, 'Yes', 'No'))) %>%
+  select(Survived, Sex, Fare, Age, Pclass, SibSp) %>%
+  na.exclude()
+
+train <- data[trainIndex, ] 
+val   <- data[-trainIndex, ]
+
+rfParametersGrid <- expand.grid(.mtry = c(1, sqrt(ncol(train)), 3, 4))
+
+start_time = Sys.time()  # midiendo tiempo
+rfModel_1 <- train(Survived ~ ., data = train, method = "rf", metric = "ROC", trControl = rfCtrl, tuneGrid = rfParametersGrid)
+end_time = Sys.time()
+predictionValidationProb_1 <- predict(rfModel_1, val, type = "prob")
+
+auc_1 <- roc(val$Survived, predictionValidationProb_1[["Yes"]], levels = unique(val[["Survived"]]))
+time_1 <- end_time - start_time
+```
+
+Discretizando:
+```{r}
+train <- data_disc[trainIndex, ] 
+val   <- data_disc[-trainIndex, ]
+
+start_time = Sys.time()   # midiendo tiempo
+rfModel_2 <- train(Survived ~ ., data = train, method = "rf", metric = "ROC", trControl = rfCtrl)
+end_time = Sys.time()
+predictionValidationProb_2 <- predict(rfModel_2, val, type = "prob")
+auc_2 <- roc(val$Survived, predictionValidationProb_2[["Yes"]], levels = unique(val[["Survived"]]))
+time_2 <- end_time - start_time
+```
+
+Comparar:
+```{r}
+plot.roc(auc_1, ylim=c(0,1), type = "S", col="#1c61b6")
+lines.roc(auc_2, type = "S", col="#008600")
+cat("Tiempo sin discretizar: ", time_1, "\nTiempo discretizando: ", time_2)
+```
+
+Las curvas ROC y los valores AUC en validación son prácticamente iguales (ligeramente mejores para el caso sin discretizar). El tiempo de ejecución es ligeramente menor en el caso discretizado. Las variaciones no son grandes, al tratarse de un problema con pocos datos; las diferencias sí que pueden ser significativas con otro tipo de técnicas y en problemas de mayor tamaño.
+
+#2. Discretización automática
+A continuación se aplica una discretización utilizando el paquete [<tt>arules</tt>](https://github.com/mhahsler/arules). Este paquete se utiliza principalmente para extracción de reglas de asociación. Incluye soporte básico para discretización con [<tt>discretize</tt>](rdocumentation.org/packages/arules/versions/1.6-4/topics/discretize), ya que las reglas de asociación trabajan normalmente con atributos categóricos.
+
+Al discretizar un conjunto de valores (por ejemplo, una columna de la tabla de datos), se asignan nuevos valores que tienen como nombre el propio intervalo:
+```{r}
+library(arules)
+
+# Discretizar una variable
+disc <- discretize(data_raw$Fare, method="frequency", labels = NULL)
+knitr::kable(head(disc))
+```
+
+Así, podemos aplicar [<tt>discretize</tt>](rdocumentation.org/packages/arules/versions/1.6-4/topics/discretize) para crear una nueva tabla de datos.
+```{r}
+data_disc_2 <-
+  data_raw %>%
+  mutate(Survived = as.factor(ifelse(Survived == 1, 'Yes', 'No'))) %>%
+  mutate(Fare_Interval = discretize(Fare, method="cluster")) %>%
+  mutate(Age_Interval  = discretize(Age, method="cluster")) %>%
+  select(Survived, Sex, Fare_Interval, Age_Interval, Pclass, SibSp) %>%
+  na.exclude()
+```
+
+Y, finalmente, entrenar modelo de clasificación:
+```{r}
+train <- data_disc_2[trainIndex, ] 
+val   <- data_disc_2[-trainIndex, ]
+
+start_time = Sys.time()   # midiendo tiempo
+rfModel_3 <- train(Survived ~ ., data = train, method = "rf", metric = "ROC", trControl = rfCtrl)
+end_time = Sys.time()
+predictionValidationProb_3 <- predict(rfModel_3, val, type = "prob")
+auc_3 <- roc(val$Survived, predictionValidationProb_3[["Yes"]], levels = unique(val[["Survived"]]))
+time_3 <- end_time - start_time
+```
+
+La comparación final es la siguiente:
+```{r}
+plot.roc(auc_1, ylim=c(0,1), type = "S", col="#1c61b6")
+lines.roc(auc_2, type = "S", col="#008600")
+lines.roc(auc_3, type = "S", col="#DC143C")
+
+# leyenda de curva ROC
+legend("bottomright", 
+       legend = c("Sin discretizar", "Discretizacion manual", "Discretizacion automatica"),
+       col = c("#1c61b6", "#008600", "#DC143C"),
+       lty = c(1, 1, 1),   # tipo de linea
+       lwd = c(1, 1, 1))   # grosor de linea 
+
+legend <- c("Sin discretizar", "Discretizando manual", "Discretizando automatica")
+times  <- c(time_1, time_2, time_3)
+aucs   <- c(auc_1$auc, auc_2$auc, auc_3$auc)
+
+knitr::kable(data.frame(legend, times, aucs))
+```
+
+
+<script type="text/javascript">
+  <!-- https://stackoverflow.com/questions/39281266/use-internal-links-in-rmarkdown-html-output/39293457 -->
+  // When the document is fully rendered...
+  $(document).ready(function() {
+    // ...select all header elements...
+    $('h1, h2, h3, h4, h5').each(function() {
+      // ...and add an id to them corresponding to their 'titles'
+      $(this).attr('id', $(this).html());
+    });
+  });
+</script>
