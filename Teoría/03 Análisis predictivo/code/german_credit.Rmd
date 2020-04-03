@@ -1,0 +1,256 @@
+---
+title: "Ensembles con conjunto de datos GermanCredit"
+output:
+  html_document:
+    df_print: paged
+html_notebook: default
+---
+
+Ensembles con el dataset [German Credit](https://www.kaggle.com/uciml/german-credit)).
+
+> El conjunto de datos GermanCredit es un _dataset_ clásico que representa a los clientes de un banco que quieren pedir un préstamo. Para cada cliente, el banco define una valoración de riesgo (_Bad_, _Good_) de acuerdo a sus atributos (edad, sexo, trabajo, vivienda, cantidad del préstamo, etc.) Este tipo de operación es muy frecuente en el ámbito bancario y suele denominarse "scoring".
+
+**El problema consiste en predecir la valoración de riesgo de un cliente desconocido.**
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Comenzaremos definiendo una función genérica para obtención de ROC. 
+
+```{r}
+library(pROC)
+
+## -------------------------------------------------------------------------------------
+## -------------------------------------------------------------------------------------
+## Funciones ##
+
+#' Cálculo de valores ROC
+#' @param data Datos originales
+#' @param predictionProb Predicciones (numéricas)
+#' @param target_var Variable objetivo de predicción
+#' @param positive_class Clase positiva de la predicción
+#' 
+#' @return Lista con valores de resultado \code{$auc}, \code{$roc}
+#' 
+#' @examples 
+#' rfModel <- train(Class ~ ., data = train, method = "rf", metric = "ROC", trControl = rfCtrl, tuneGrid = rfParametersGrid)
+#' roc_res <- my_roc(data = validation, predict(rfModel, validation, type = "prob"), "Class", "Good")
+
+my_roc <- function(data, predictionProb, target_var, positive_class) {
+  auc <- roc(data[[target_var]], predictionProb[[positive_class]], levels = unique(data[[target_var]]))
+  roc <- plot.roc(auc, ylim=c(0,1), type = "S" , print.thres = T, main=paste('AUC:', round(auc$auc[[1]], 2)))
+  return(list("auc" = auc, "roc" = roc))
+}
+## -------------------------------------------------------------------------------------
+## -------------------------------------------------------------------------------------
+```
+
+#0. Carga de datos
+Leemos el fichero de datos, ya incluido en la biblioteca <tt>caret</tt>. El fichero ya incluye las variables categóricas como binarias. La variable objetivo de clasificación es 'Class'.
+
+```{r}
+library(caret)
+library(tidyverse)
+
+data(GermanCredit)
+data <- as_tibble(GermanCredit)
+knitr::kable(head(select(data, 1:7)))
+```
+
+Se puede comprobar que existen aproximadamente la mitad de valoraciones _Bad_ respecto a _Good_.
+```{r}
+ggplot(data) + geom_histogram(aes(x = Class, fill = Class), stat = 'count')
+```
+
+#1. Creación de modelos de predicción
+A continuación, creamos varios modelos de predicción: <tt>rpart</tt>, <tt>rf</tt>, <tt>svm</tt>, <tt>nnet</tt>.
+
+```{r}
+set.seed(0)
+trainIndex <- createDataPartition(data$Class, p = .75, list = FALSE, times = 1)
+train <- data[ trainIndex, ] 
+val   <- data[-trainIndex, ]
+```
+
+## 1.1 <tt>rpart</tt>
+Entrenar modelo:
+```{r}
+# Configuración del entrenamiento
+rpartCtrl <- trainControl(
+  verboseIter = F, 
+  classProbs = TRUE, 
+  method = "repeatedcv",
+  number = 10,
+  repeats = 1,
+  summaryFunction = twoClassSummary)
+
+# Grid de parámetros
+rpartParametersGrid <- expand.grid(
+  .cp = c(0.001, 0.01, 0.1, 0.5))
+
+# Entrenamiento
+rpartModel <- train(
+  Class ~ ., 
+  data = train, 
+  method = "rpart",
+  metric = "ROC", 
+  trControl = rpartCtrl, 
+  tuneGrid = rpartParametersGrid)
+```
+
+Validar modelo:
+```{r}
+# Obtener predicciones
+predictionProb <- predict(rpartModel, val, type = "prob")
+
+# Calcular curva ROC y AUC
+roc_1 <- my_roc(val, predictionProb, "Class", "Good")
+```
+
+## 1.2 <tt>rf</tt>
+Entrenar modelo:
+```{r}
+# Configuración del entrenamiento
+rfCtrl <- trainControl(
+  verboseIter = F, 
+  classProbs = TRUE, 
+  method = "repeatedcv", 
+  number = 10, 
+  repeats = 1, 
+  summaryFunction = twoClassSummary)
+
+# Grid de parámetros
+rfParametersGrid <- 
+  expand.grid(.mtry = c(1:5))
+
+# Entrenamiento
+rfModel <- train(
+  Class ~ ., 
+  data = train, 
+  method = "rf", 
+  metric = "ROC", 
+  trControl = rfCtrl, 
+  tuneGrid = rfParametersGrid)
+```
+Validar modelo:
+```{r}
+# Obtener predicciones
+predictionProb <- predict(rfModel, val, type = "prob")
+
+# Calcular curva ROC y AUC
+roc_2 <- my_roc(val, predictionProb, "Class", "Good")
+```
+
+## 1.3 <tt>svm</tt>
+Entrenar modelo:
+```{r}
+# Configuración del entrenamiento
+svmCtrl <- trainControl(
+  verboseIter = F, 
+  classProbs = TRUE, 
+  method = "repeatedcv", 
+  number = 10, 
+  repeats = 1, 
+  summaryFunction = twoClassSummary)
+
+# Entrenamiento
+svmModel <- train(
+  Class ~ ., 
+  data = train, 
+  method = "svmRadial", 
+  metric = "ROC", 
+  trControl = svmCtrl, 
+  tuneLength = 10)
+```
+
+Validar modelo:
+```{r}
+# Obtener predicciones
+predictionProb <- predict(svmModel, val, type = "prob")
+
+# Calcular curva ROC y AUC
+roc_3 <- my_roc(val, predictionProb, "Class", "Good")
+```
+
+## 1.4 <tt>nnet</tt>
+Entrenar modelo:
+
+```{r}
+# Configuración del entrenamiento
+nnCtrl <- trainControl(
+  verboseIter = F, 
+  classProbs = TRUE, 
+  method = "repeatedcv", 
+  number = 10, 
+  repeats = 1, 
+  summaryFunction = twoClassSummary)
+
+# Grid de parámetros
+nnParametersGrid <- 
+  expand.grid(.decay = c(0.5, 0.1), .size = c(5, 6, 7))
+
+# Entrenamiento
+nnModel <- train(
+  Class ~ ., 
+  data = train, 
+  method = "nnet", 
+  metric = "ROC", 
+  tuneGrid = nnParametersGrid, 
+  trControl = nnCtrl, 
+  trace = FALSE, 
+  maxit = 1000) 
+```
+
+Validar modelo:
+```{r}
+# Obtener predicciones
+predictionProb <- predict(nnModel, val, type = "prob")
+
+# Calcular curva ROC y AUC
+roc_4 <- my_roc(val, predictionProb, "Class", "Good")
+```
+
+## 1.5 <tt>xgbTree</tt>
+Entrenar modelo:
+
+```{r}
+# Configuración del entrenamiento
+xgbCtrl <- trainControl(
+  method = "repeatedcv",
+  number = 10,
+  repeats = 1,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+# Grid de parámetros
+xgbGrid <- expand.grid( # https://xgboost.readthedocs.io/en/latest/parameter.html
+  nrounds = 200,
+  max_depth = c(6, 8, 10),
+  eta = c(0.001, 0.003, 0.01),
+  gamma = 1,
+  colsample_bytree = 0.5,
+  min_child_weight = 6,
+  subsample = 0.5
+)
+
+# Entrenamiento
+xgbModel <- train(
+  Class ~ ., 
+  data = train, 
+  method = "xgbTree", 
+  metric = "ROC", 
+  trControl = xgbCtrl,
+  tuneGrid = xgbGrid
+)
+```
+
+Validar modelo:
+```{r}
+# Obtener predicciones
+predictionProb <- predict(xgbModel, val, type = "prob")
+
+# Calcular curva ROC y AUC
+roc_5 <- my_roc(val, predictionProb, "Class", "Good")
+```
