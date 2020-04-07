@@ -1,0 +1,460 @@
+---
+title: "Ensembles con conjunto de datos GermanCredit"
+output:
+  html_document:
+    df_print: paged
+html_notebook: default
+---
+
+Balanceo de clases con el dataset [Lending Club](https://www.lendingclub.com/info/download-data.action).
+
+Partiendo de la selección de variables realizada en un ejercicio anterior, construiremos vamos modelos de predicción aplicando varias técnicas de balanceo de clases.
+
+<br/>
+**Índice**
+
+* [Funciones generales](#Funciones generales)
+* [0. Carga de datos](#0. Carga de datos)
+* [1. Crear modelo de predicción con partición aleatoria](#1. Crear modelo de predicción con partición aleatoria)
+* [2. Crear modelo de predicción con "downsampling"](#2. Crear modelo de predicción con "downsampling")
+* [3. Crear modelo de predicción con "upsampling"](#3. Crear modelo de predicción con "upsampling")
+* [4. Crear modelo de predicción con SMOTE](#4. Crear modelo de predicción con SMOTE)
+* [5. Evaluar modelos sobre el conjunto de test](#5. Evaluar modelos sobre el conjunto de test)
+* [6. Resampleado dentro de train](#6. Resampleado dentro de train)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(caret)
+library(tidyverse)
+library(pROC)
+library(DMwR)
+library(RColorBrewer)
+
+set.seed(0)
+```
+
+#Funciones generales
+Comenzaremos definiendo dos funciones genéricas para ajuste de niveles, obtención de ROC y creación de modelos "rf".
+```{r include=FALSE}
+#Definición de funciones
+
+## -------------------------------------------------------------------------------------
+## -------------------------------------------------------------------------------------
+## Funciones ##
+
+#' Ampliar niveles de un modelo de clasificación
+#' @param model Modelo de clasificación
+#' @param data Datos con niveles adicionales
+#'
+#' @return Modelo con niveles actualizados
+extend_levels <- function(model, data) {
+  for(i in 1:length(model$xlevels)) {
+    var <- names(model$xlevels)[[i]]
+    model$xlevels[[var]] <- union(model$xlevels[[var]], levels(as.factor(data[[var]])))
+  }
+  return(model)
+}
+
+#' Cálculo de valores ROC
+#' @param data Datos originales
+#' @param predictionProb Predicciones (numéricas)
+#' @param target_var Variable objetivo de predicción
+#' @param positive_class Clase positiva de la predicción
+#' @param show_plot Mostrar curva ROC
+#' 
+#' @return Lista con valores de resultado \code{$auc}, \code{$roc}
+#' 
+#' @examples 
+#' rfModel <- train(Class ~ ., data = train, method = "rf", metric = "ROC", trControl = rfCtrl, tuneGrid = rfParametersGrid)
+#' roc_res <- my_roc(data = validation, predict(rfModel, validation, type = "prob"), "Class", "Good")
+
+my_roc <- function(data, predictionProb, target_var, positive_class, show_plot = TRUE) {
+  auc <- roc(data[[target_var]], predictionProb[[positive_class]], levels = unique(data[[target_var]]))
+  if(show_plot)
+    roc <- plot.roc(auc, ylim=c(0,1), type = "S" , print.thres = T, main=paste('AUC:', round(auc$auc[[1]], 2)))
+  return(list("auc" = auc, "roc" = roc))
+}
+
+#' Creación de modelo RandomForest
+#' @param train Datos de entrenamiento
+#' @param rfCtrl Estructura trainControl
+#' @param rfParametersGrid Estructura tuneGrid
+#' 
+#' @return Modelo entrenado
+trainRF <- function(train_data, rfCtrl = NULL, rfParametersGrid = NULL) {
+  if(is.null(rfCtrl)) {
+    rfCtrl <- trainControl(
+      verboseIter = F, 
+      classProbs = TRUE, 
+      method = "repeatedcv", 
+      number = 10, 
+      repeats = 1, 
+      summaryFunction = twoClassSummary)    
+  }
+  if(is.null(rfParametersGrid)) {
+    rfParametersGrid <- expand.grid(
+      .mtry = c(sqrt(ncol(train)))) 
+  }
+  
+  rfModel <- train(
+    loan_status ~ ., 
+    data = train_data, 
+    method = "rf", 
+    metric = "ROC", 
+    trControl = rfCtrl, 
+    tuneGrid = rfParametersGrid)
+
+  return(rfModel)
+}
+## -------------------------------------------------------------------------------------
+## -------------------------------------------------------------------------------------
+```
+
+#0. Carga de datos
+Leemos el fichero de datos generado previamente, con la selección de variables ya hecha. Eliminamos NAs para lo que resta del cuaderno. Para simplificar el proceso, seleccionamos el 5% de los datos para entrenamient+validación y reservamos el 20% para test.
+
+```{r}
+library(tidyverse)
+library(dplyr)
+data_raw <- read_csv('LoanStats_2017Q4-SelVar.csv', na = c('NA', 'n/a', '', ' '))
+
+# Selección de datos sobre las que se realizará entrenamiento y validación
+data <- data_raw %>%
+  dplyr::top_n(round(0.05 * nrow(data_raw))) %>%
+  na.exclude() %>%
+  mutate(loan_status = as.factor(loan_status))
+knitr::kable(select(head(data_raw), 1:6))
+
+# Selección de datos para test
+test <- data_raw %>%
+  dplyr::top_n(-round(0.2 * nrow(data_raw))) %>%
+  na.exclude() %>%
+  mutate(loan_status = as.factor(loan_status))
+```
+
+Se puede comprobar que existe un considerable desbalanceo de clases.
+```{r warning=FALSE}
+table(data$loan_status)
+
+ggplot(data) + 
+  geom_histogram(aes(x = loan_status, fill = loan_status), stat = 'count')
+```
+
+#1. Crear modelo de predicción con partición aleatoria
+Comenzamos creando un modelo de predicción de la forma habitual, usando una partición aleatoria.
+
+Es habitual que, al haber entrenado sobre un conjunto más limitado, algunos valores de las variables categóricas que están en el conjunto de validación no hayan sido vistas por el modelo durante el entrenamiento. Esto provoca un error de tipo "nuevos niveles", por lo que es necesario rehacer los niveles añadiendo todos los valores que pudiera haber en el conjunto de validación
+
+```{r}
+# Crear partición
+trainIndex <- createDataPartition(data$loan_status, p = .75, list = FALSE, times = 1)
+train <- data[ trainIndex, ] 
+val   <- data[-trainIndex, ]
+table(train$loan_status)
+table(val$loan_status)
+
+# Entrenar modelo
+rfModel <- trainRF(train)
+
+# Validar modelo
+rfModel <- extend_levels(rfModel, val)
+prediction_p <- predict(rfModel, val, type = "prob")
+prediction_r <- predict(rfModel, val, type = "raw")
+result <- my_roc(val, prediction_p, "loan_status", "Paid")
+
+# Guardar modelo
+orig_fit <- rfModel
+orig_roc <- result
+```
+
+Al visualizar la validación del modelo de forma gráfica, podemos comprobar que no se hace ninguna predicción para la clase minoritaria 'Paid'.
+```{r}
+plotdata <- val %>%
+  select(loan_status) %>%
+  bind_cols(prediction_p) %>%
+  bind_cols(Prediction = prediction_r)
+
+table(plotdata$loan_status, plotdata$Prediction)  # columnas son predicciones
+
+ggplot(plotdata) + 
+    geom_bar(aes(x = loan_status, fill = Prediction), position = position_fill())
+```
+
+#2. Crear modelo de predicción con "downsampling"
+A continuación, creamos un modelo de predicción con "rf" aplicando "downsampling" con [<tt>downSample</tt>](https://rdrr.io/cran/caret/man/downSample.html):
+```{r}
+# Crear dataset reducido con downsampling
+predictors <- select(data, -loan_status)
+data_down <- downSample(x = predictors, y = data$loan_status, yname = 'loan_status')
+print("Datos después de downsampling: ")
+table(data_down$loan_status)
+
+# Crear particiones aleatorias sobre el dataset reducido
+trainIndex <- createDataPartition(data_down$loan_status, p = .75, list = FALSE, times = 1)
+train <- data_down[ trainIndex, ] 
+val   <- data_down[-trainIndex, ]
+print("Datos de entrenamiento después de de downsampling: ")
+table(train$loan_status)
+print("Datos de validación después de de downsampling: ")
+table(val$loan_status)
+
+# Entrenar modelo
+rfModel <- trainRF(train)
+
+# Validar modelo
+rfModel <- extend_levels(rfModel, val)
+prediction_p <- predict(rfModel, val, type = "prob")
+prediction_r <- predict(rfModel, val, type = "raw")
+result <- my_roc(val, prediction_p, "loan_status", "Paid")
+
+# Guardar modelo
+down_fit <- rfModel
+down_roc <- result
+```
+
+Al visualizar la validación del modelo de forma gráfica, podemos comprobar que ahora sí se hacen algunas evaluaciones para la clase minoritaria 'Paid'. 
+```{r}
+plotdata <- val %>%
+  select(loan_status) %>%
+  bind_cols(prediction_p) %>%
+  bind_cols(Prediction = prediction_r)
+
+table(plotdata$loan_status, plotdata$Prediction)
+
+ggplot(plotdata) + 
+  geom_bar(aes(x = loan_status, fill = Prediction), position = position_fill())
+```
+
+*Atención*: Esta validación está hecha con el conjunto obtenido después del "downsampling". Para hacer la comparación adecuadamente, hacemos una validación con un conjunto de datos de test.
+
+```{r}
+# Ajustar niveles
+for(i in 1:length(rfModel$xlevels)) {
+  var <- names(rfModel$xlevels)[[i]]
+  rfModel$xlevels[[var]] <- union(rfModel$xlevels[[var]], levels(as.factor(test[[var]])))
+}
+
+# Obtener predicciones y calcular ROC
+rfModel <- extend_levels(rfModel, test)
+prediction_p <- predict(rfModel, test, type = "prob")
+prediction_r <- predict(rfModel, test, type = "raw")
+result <- my_roc(test, prediction_p, "loan_status", "Paid")
+
+# Visualizar datos
+plotdata <- test %>%
+  select(loan_status) %>%
+  bind_cols(prediction_p) %>%
+  bind_cols(Prediction = prediction_r)
+table(plotdata$loan_status, plotdata$Prediction)
+ggplot(plotdata) + 
+  geom_bar(aes(x = loan_status, fill = Prediction), position = position_fill())
+```
+
+#3. Crear modelo de predicción con "upsampling"
+Repetimos el proceso anterior aplicando [<tt>upSample</tt>](https://rdrr.io/cran/caret/man/downSample.html):
+
+```{r}
+# Crear dataset con upsampling
+predictors <- select(data, -loan_status)
+data_up <- upSample(x = predictors, y = data$loan_status, yname = 'loan_status')
+print("Datos después de downsampling: ")
+table(data_up$loan_status)
+
+# Entrenar modelo
+rfModel <- trainRF(train)
+
+# Validar modelo
+rfModel <- extend_levels(rfModel, val)
+prediction_p <- predict(rfModel, val, type = "prob")
+prediction_r <- predict(rfModel, val, type = "raw")
+result <- my_roc(val, prediction_p, "loan_status", "Paid")
+
+# Guardar modelo
+up_fit <- rfModel
+up_roc <- result
+```
+
+Al visualizar la validación del modelo de forma gráfica, podemos comprobar de nuevo que sí se hacen algunas evaluaciones para la clase minoritaria 'Paid'. 
+```{r}
+plotdata <- val %>%
+  select(loan_status) %>%
+  bind_cols(prediction_p) %>%
+  bind_cols(Prediction = prediction_r)
+
+table(plotdata$loan_status, plotdata$Prediction)
+
+ggplot(plotdata) + 
+  geom_bar(aes(x = loan_status, fill = Prediction), position = position_fill())
+```
+
+
+#4. Crear modelo de predicción con SMOTE
+Por último, hacemos rebalanceado de clases utilizando [<tt>SMOTE</tt>](https://www.rdocumentation.org/packages/DMwR/versions/0.4.1/topics/SMOTE) de [<tt>DMwR</tt>](https://www.rdocumentation.org/packages/DMwR/versions/0.4.1).
+
+```{r}
+# Prepara dataset para SMOTE
+data_for_SMOTE <- data %>%
+  mutate_if(is.character, as.factor) %>%
+  as.data.frame()
+
+# Generar ejemplos con SMOTE
+data_smote <- SMOTE(loan_status ~ ., data_for_SMOTE, perc.over = 600, dataperc.under = 100)  
+table(data_smote$loan_status) 
+
+# Entrenar modelo
+rfModel <- trainRF(train)
+
+# Validar modelo
+rfModel <- extend_levels(rfModel, val)
+prediction_p <- predict(rfModel, val, type = "prob")
+prediction_r <- predict(rfModel, val, type = "raw")
+result <- my_roc(val, prediction_p, "loan_status", "Paid")
+
+# Guardar modelo
+smote_fit <- rfModel
+smote_roc <- result
+```
+
+De nuevo, visualizamos la validación del modelo de forma gráfica.
+```{r}
+plotdata <- val %>%
+  select(loan_status) %>%
+  bind_cols(prediction_p) %>%
+  bind_cols(Prediction = prediction_r)
+
+table(plotdata$loan_status, plotdata$Prediction)
+
+ggplot(plotdata) + 
+  geom_bar(aes(x = loan_status, fill = Prediction), position = position_fill())
+```
+
+#5. Evaluar modelos sobre el conjunto de test
+Para terminar, evaluamos los tres modelos sobre el conjunto de test. Se puede comprobar que el rebalanceo de clases no funciona en todos los casos.
+```{r}
+## seleccionar colores
+colors <- brewer.pal(4, "Pastel1")
+
+## crear tabla de resultados ROC (+ leyendas y colores)
+roc_table <- tibble(name=character(), auc=list(), color=character())
+
+## crear lista de modelos
+models <- c(list(orig_fit), list(down_fit), list(up_fit), list(smote_fit))
+models_name <- c("original", "down", "up", "smote")
+
+## añadir valores a tabla de resultados
+for(i in 1:length(models)) {
+  rfModel <- models[[i]]
+  
+  ### rehacer niveles
+  for(j in 1:length(rfModel$xlevels)) {
+    var <- names(rfModel$xlevels)[[j]]
+    rfModel$xlevels[[var]] <- union(rfModel$xlevels[[var]], levels(as.factor(test[[var]])))
+  }
+  
+  ### otener predicciones y calcular ROC
+  prediction_p <- predict(rfModel, test, type = "prob")
+  prediction_r <- predict(rfModel, test, type = "raw")
+  result <- my_roc(test, prediction_p, "loan_status", "Paid", show_plot = FALSE)
+  
+  ### añadir fila
+  roc_table <- roc_table %>%
+    add_row(name = paste(models_name[i], "AUC=", round(result$auc$auc[[1]], 2)), 
+          auc = list(result$auc),
+          color = colors[i])
+}
+
+## mostrar curvas en pantalla
+plot <- plot.roc(roc_table[1,]$auc[[1]], ylim=c(0,1), type = "S", col = roc_table[1,]$color)
+for(i in 2:nrow(roc_table)) {
+  lines.roc(roc_table[i,]$auc[[1]], type = "S",  col = roc_table[i,]$color)
+}
+
+## insertar leyendas
+legend("bottomright", 
+       legend = roc_table$name,
+       col = roc_table$color,
+       lty = 1,   # tipo de linea
+       lwd = 2)   # grosor de linea 
+```
+
+#6. Resampleado dentro de train
+Para finalizar, se muestra cómo se puede realizar balanceado dentro del propio proceso de train:
+
+```{r}
+# Crear particiones aleatorias
+trainIndex <- createDataPartition(data$loan_status, p = .75, list = FALSE, times = 1)
+train <- data[ trainIndex, ] 
+val   <- data[-trainIndex, ]
+
+table(train$loan_status)
+
+# Reducir conjunto de train para hacer pruebas
+train <- sample_n(train, size = 2000)
+
+# Configuración del proceso de entrenamiento
+rfCtrl <- trainControl(
+  verboseIter = F, 
+  classProbs = TRUE, 
+  method = "repeatedcv", 
+  number = 10, 
+  repeats = 1, 
+  summaryFunction = twoClassSummary,
+  sampling = "down")
+
+# Grid de parámetros
+rfParametersGrid <- expand.grid(
+  .mtry = c(sqrt(ncol(train)))) 
+
+# Modelo con "downsampling"
+down_inside <- train(
+  loan_status ~ ., 
+  data = train,
+  method = "rf",
+  metric = "ROC",
+  trControl = rfCtrl,
+  tuneGrid = rfParametersGrid)
+
+# Modelo con "upsampling" : cambiamos el tipo de sampling en rfCtrl a "up"
+rfCtrl$sampling <- "up"
+up_inside <- train(
+  loan_status ~ ., 
+  data = train,
+  method = "rf",
+  metric = "ROC",
+  trControl = rfCtrl,
+  tuneGrid = rfParametersGrid)
+
+# Modelo con "smote" : cambiamos el tipo de sampling en rfCtrl a "smote"
+rfCtrl$sampling <- "smote"
+smote_inside <- train(
+  loan_status ~ ., 
+  data = train,
+  method = "rf",
+  metric = "ROC",
+  trControl = rfCtrl,
+  tuneGrid = rfParametersGrid)
+```
+
+Para la evaluación utilizaremos la función [<tt>resamples</tt>](https://www.rdocumentation.org/packages/caret/versions/6.0-85/topics/resamples):
+```{r}
+inside_models <- list(down = down_inside,
+                      up = up_inside,
+                      SMOTE = smote_inside)
+inside_resampling <- resamples(inside_models)
+summary(inside_resampling, metric = "ROC")
+```
+
+<script type="text/javascript">
+  <!-- https://stackoverflow.com/questions/39281266/use-internal-links-in-rmarkdown-html-output/39293457 -->
+  // When the document is fully rendered...
+  $(document).ready(function() {
+    // ...select all header elements...
+    $('h1, h2, h3, h4, h5').each(function() {
+      // ...and add an id to them corresponding to their 'titles'
+      $(this).attr('id', $(this).html());
+    });
+  });
+</script>
+
+
