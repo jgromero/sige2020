@@ -12,13 +12,30 @@ Ensembles con el dataset [German Credit](https://www.kaggle.com/uciml/german-cre
 
 **El problema consiste en predecir la valoración de riesgo de un cliente desconocido.**
 
+<br/>
+**Índice**
+
+* [Funciones generales](#Funciones generales)
+* [0. Carga de datos](#0. Carga de datos)
+* [1. Creación de modelos de predicción](#1. Creación de modelos de predicción)
+    * [1.1 <tt>rpart</tt>](#1.1 <tt>rpart</tt>)
+    * [1.2 <tt>rf</tt>](#1.2 <tt>rf</tt>)
+    * [1.3 <tt>svm</tt>](#1.3 <tt>svm</tt>)
+    * [1.4 <tt>nnet</tt>](#1.4 <tt>nnet</tt>)
+    * [1.5 <tt>xgbTree</tt>](#1.5 <tt>xgbTree</tt>)
+* [2. Creación de listas de modelos de predicción](#2. Creación de listas de modelos de predicción)
+    * [2.1 Usando los mismos hiperparámetros y configuración](#2.1 Usando los mismos hiperparámetros y configuración)
+    * [2.2 Usando diferentes hiperparámetros y configuración](#2.2 Usando diferentes hiperparámetros y configuración)
+* [3. Creación de ensembles mediante _stacking_](#3. Creación de ensembles mediante _stacking_)
+    
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+#Funciones generales
 Comenzaremos definiendo una función genérica para obtención de ROC. 
 
-```{r}
+```{r echo=FALSE, include=FALSE}
 library(pROC)
 
 ## -------------------------------------------------------------------------------------
@@ -30,6 +47,7 @@ library(pROC)
 #' @param predictionProb Predicciones (numéricas)
 #' @param target_var Variable objetivo de predicción
 #' @param positive_class Clase positiva de la predicción
+#' @param show_plot Mostrar curva ROC
 #' 
 #' @return Lista con valores de resultado \code{$auc}, \code{$roc}
 #' 
@@ -37,9 +55,10 @@ library(pROC)
 #' rfModel <- train(Class ~ ., data = train, method = "rf", metric = "ROC", trControl = rfCtrl, tuneGrid = rfParametersGrid)
 #' roc_res <- my_roc(data = validation, predict(rfModel, validation, type = "prob"), "Class", "Good")
 
-my_roc <- function(data, predictionProb, target_var, positive_class) {
+my_roc <- function(data, predictionProb, target_var, positive_class, show_plot = TRUE) {
   auc <- roc(data[[target_var]], predictionProb[[positive_class]], levels = unique(data[[target_var]]))
-  roc <- plot.roc(auc, ylim=c(0,1), type = "S" , print.thres = T, main=paste('AUC:', round(auc$auc[[1]], 2)))
+  if(show_plot)
+    roc <- plot.roc(auc, ylim=c(0,1), type = "S" , print.thres = T, main=paste('AUC:', round(auc$auc[[1]], 2)))
   return(list("auc" = auc, "roc" = roc))
 }
 ## -------------------------------------------------------------------------------------
@@ -47,9 +66,9 @@ my_roc <- function(data, predictionProb, target_var, positive_class) {
 ```
 
 #0. Carga de datos
-Leemos el fichero de datos, ya incluido en la biblioteca <tt>caret</tt>. El fichero ya incluye las variables categóricas como binarias. La variable objetivo de clasificación es 'Class'.
+Leemos el fichero de datos, ya incluido en la biblioteca [<tt>caret</tt>](http://topepo.github.io/caret/). El fichero ya incluye las variables categóricas como binarias. La variable objetivo de clasificación es 'Class'.
 
-```{r}
+```{r include=FALSE}
 library(caret)
 library(tidyverse)
 
@@ -59,7 +78,7 @@ knitr::kable(head(select(data, 1:7)))
 ```
 
 Se puede comprobar que existen aproximadamente la mitad de valoraciones _Bad_ respecto a _Good_.
-```{r}
+```{r warning=FALSE}
 ggplot(data) + geom_histogram(aes(x = Class, fill = Class), stat = 'count')
 ```
 
@@ -73,7 +92,7 @@ train <- data[ trainIndex, ]
 val   <- data[-trainIndex, ]
 ```
 
-## 1.1 <tt>rpart</tt>
+##1.1 <tt>rpart</tt>
 Entrenar modelo:
 ```{r}
 # Configuración del entrenamiento
@@ -108,7 +127,7 @@ predictionProb <- predict(rpartModel, val, type = "prob")
 roc_1 <- my_roc(val, predictionProb, "Class", "Good")
 ```
 
-## 1.2 <tt>rf</tt>
+##1.2 <tt>rf</tt>
 Entrenar modelo:
 ```{r}
 # Configuración del entrenamiento
@@ -142,9 +161,9 @@ predictionProb <- predict(rfModel, val, type = "prob")
 roc_2 <- my_roc(val, predictionProb, "Class", "Good")
 ```
 
-## 1.3 <tt>svm</tt>
+##1.3 <tt>svm</tt>
 Entrenar modelo:
-```{r}
+```{r message=FALSE, warning=FALSE}
 # Configuración del entrenamiento
 svmCtrl <- trainControl(
   verboseIter = F, 
@@ -154,13 +173,18 @@ svmCtrl <- trainControl(
   repeats = 1, 
   summaryFunction = twoClassSummary)
 
+# Grid de parámetros
+svmParametersGrid <- 
+  expand.grid(C = seq(0, 2, by = 1), sigma = seq(2, 5, by = 1))
+
 # Entrenamiento
 svmModel <- train(
   Class ~ ., 
   data = train, 
   method = "svmRadial", 
   metric = "ROC", 
-  trControl = svmCtrl, 
+  trControl = svmCtrl,  
+  # tuneGrid = svmParametersGrid)
   tuneLength = 10)
 ```
 
@@ -173,10 +197,10 @@ predictionProb <- predict(svmModel, val, type = "prob")
 roc_3 <- my_roc(val, predictionProb, "Class", "Good")
 ```
 
-## 1.4 <tt>nnet</tt>
+##1.4 <tt>nnet</tt>
 Entrenar modelo:
 
-```{r}
+```{r message=FALSE}
 # Configuración del entrenamiento
 nnCtrl <- trainControl(
   verboseIter = F, 
@@ -211,10 +235,10 @@ predictionProb <- predict(nnModel, val, type = "prob")
 roc_4 <- my_roc(val, predictionProb, "Class", "Good")
 ```
 
-## 1.5 <tt>xgbTree</tt>
+##1.5 <tt>xgbTree</tt>
 Entrenar modelo:
 
-```{r}
+```{r message=FALSE}
 # Configuración del entrenamiento
 xgbCtrl <- trainControl(
   method = "repeatedcv",
@@ -254,3 +278,291 @@ predictionProb <- predict(xgbModel, val, type = "prob")
 # Calcular curva ROC y AUC
 roc_5 <- my_roc(val, predictionProb, "Class", "Good")
 ```
+
+#2. Creación de listas de modelos de predicción
+De manera similar al apartado anterior, es posible crear varios modelos de [<tt>caret</tt>](http://topepo.github.io/caret/) al mismo tiempo y manejarlos como una lista. El entrenamiento de los modelos puede hacerse utilizando los mismos hiperparámetros y configuración de entrenamiento para todos o especificando individualmente. En ambos casos, usaremos [<tt>caretList</tt>](https://rdrr.io/cran/caretEnsemble/man/caretList.html) de [<tt>caretEnsemble</tt>](https://rdrr.io/cran/caretEnsemble/).
+
+##2.1 Usando los mismos hiperparámetros y configuración
+Entrenar modelos:
+```{r message=FALSE}
+library(caretEnsemble)
+
+# Parámetros de control (los mismos para todos)
+listCtrl <- trainControl(
+  verboseIter = F, 
+  classProbs = TRUE, 
+  method = "repeatedcv", 
+  number = 10, 
+  repeats = 1, 
+  summaryFunction = twoClassSummary)
+
+# Lista de modelos + entrenamiento
+model_list <- caretList(
+  Class ~ ., 
+  data = train,
+  trControl = listCtrl,
+  metric = "ROC",
+  methodList=c("rpart", "rf", "svmRadial", "nnet", "xgbTree"))
+
+# Mostrar información de los modelos
+print(model_list)
+
+# Mostrar información de un modelo específico (e.g. rpart)
+print(model_list$rpart)
+
+model_list_original <- model_list  # grabar para utilizar después
+```
+
+Validar modelos:
+
+*NOTA*: La visualización de múltiples curvas ROC que se hace a continuación puede adaptarse fácilmente para comparar los modelos de la sección 1.
+```{r}
+# Obtener predicciones
+predictions_list <- predict(model_list, newdata = val)
+knitr::kable(head(predictions_list))
+
+# Comparar resultados en curva ROC
+library(RColorBrewer)
+colors <- brewer.pal(length(model_list), "Pastel1")
+
+## crear tabla de resultados ROC (+ leyendas y colores)
+roc_table <- tibble(name=character(), auc=list(), color=character())
+for(i in 1:length(model_list)) {
+  roc_i   <- my_roc(val, predict(model_list[[i]], val, type = "prob"), "Class", "Good", show_plot = FALSE) 
+  name_i  <- paste(names(model_list)[i], " AUC=", round(roc_i$auc$auc[[1]], 2))
+  color_i <- colors[i]
+
+  roc_table <- roc_table %>% 
+    add_row(name = name_i, auc = list(roc_i$auc), color = color_i)  
+}
+
+## mostrar curvas en pantalla
+plot <- plot.roc(roc_table[1,]$auc[[1]], ylim=c(0,1), type = "S", col = roc_table[1,]$color)
+for(i in 2:length(model_list)) {
+  lines.roc(roc_table[i,]$auc[[1]], type = "S",  col = roc_table[i,]$color)
+}
+
+## insertar leyendas
+legend("bottomright", 
+       legend = roc_table$name,
+       col = roc_table$color,
+       lty = c(1, 1, 1),   # tipo de linea
+       lwd = c(2, 2, 2))   # grosor de linea 
+
+```
+##2.2 Usando diferentes hiperparámetros y configuración
+Entrenar modelos:
+```{r message=FALSE}
+model_list <- caretList(
+  Class ~ ., 
+  data = train,
+  trControl = listCtrl,
+  metric= "ROC",
+  tuneList=list(
+    rpart = caretModelSpec(method="rpart",     tuneGrid = expand.grid(.cp = c(0.001, 0.01, 0.1, 0.5))),
+    rf    = caretModelSpec(method="rf",        tuneGrid = expand.grid(.mtry = c(1:5))),
+    svm   = caretModelSpec(method="svmRadial", tuneLength = 10), 
+    nnet  = caretModelSpec(method="nnet",      tuneGrid = expand.grid(.decay = c(0.5, 0.1), .size = c(5, 6, 7)), trace = FALSE)
+  )
+)
+```
+
+Validar resultados (mismo código que en 2.1):
+```{r}
+# Comparar resultados en curva ROC
+colors <- brewer.pal(length(model_list), "Pastel1")
+
+## crear tabla de resultados ROC (+ leyendas y colores)
+roc_table <- tibble(name=character(), auc=list(), color=character())
+for(i in 1:length(model_list)) {
+  roc_i   <- my_roc(val, predict(model_list[[i]], val, type = "prob"), "Class", "Good", show_plot = FALSE) 
+  name_i  <- paste(names(model_list)[i], " AUC=", round(roc_i$auc$auc[[1]], 2))
+  color_i <- colors[i]
+
+  roc_table <- roc_table %>% 
+    add_row(name = name_i, auc = list(roc_i$auc), color = color_i)  
+}
+
+## mostrar curvas en pantalla
+plot <- plot.roc(roc_table[1,]$auc[[1]], ylim=c(0,1), type = "S", col = roc_table[1,]$color)
+for(i in 2:length(model_list)) {
+  lines.roc(roc_table[i,]$auc[[1]], type = "S",  col = roc_table[i,]$color)
+}
+
+## insertar leyendas
+legend("bottomright", 
+       legend = roc_table$name,
+       col = roc_table$color,
+       lty = c(1, 1, 1),   # tipo de linea
+       lwd = c(2, 2, 2))   # grosor de linea 
+```
+
+#3. Creación de ensembles mediante _stacking_
+Podemos generar ensembles utilizando modelos ya entrenados mediante _stacking_ empleando las funciones [<tt>caretEnsemble</tt>](https://www.rdocumentation.org/packages/caretEnsemble/versions/2.0.1/topics/caretEnsemble) y [<tt>caretStack</tt>](https://www.rdocumentation.org/packages/caretEnsemble/versions/2.0.1/topics/caretStack), ambas también  dentro del paquete [<tt>caretEnsemble</tt>](https://rdrr.io/cran/caretEnsemble/).
+
+##3.1 _stacking_ básico
+En caret, el _stacking_ básico consiste en combinar las salidas de varios modelos utilizando un modelo de pesos. Los pesos se aprenden automáticamente utilizando un algoritmo 'greedy' para optimizar la salida del ensemble. 
+
+Para seleccionar qué modelos vamos a utilizar en el _stacking_, sería interesante analizar cuáles de ellos son independientes y pueden abordar adecuadamente diferentes secciones de la distribución de datos. Para estudiar la correlación entre los resultados de dos modelos de clasificación podemos utilizar [<tt>xyplot</tt>](https://www.rdocumentation.org/packages/lattice/versions/0.10-10/topics/xyplot) y dibujar los resultados de AUC obtenidos sobre varios conjuntos de datos iguales. Estos valores se extraen utilizando la función [<tt>resamples</tt>] sobre la lista de modelos entrenada con [<tt>caretList</tt>](https://rdrr.io/cran/caretEnsemble/man/caretList.html).
+
+A continuación, podemos ver que "rf" está muy correlado con "nnet" pero menos claramente con "svm". De forma similar, "svm" no está muy correlado con "nnet".
+```{r}
+# rf vs nnet
+xyplot(resamples(c(model_list[2], model_list[4])))
+
+# rf vs svm
+xyplot(resamples(c(model_list[2], model_list[3])))
+
+# nnet vs svm
+xyplot(resamples(c(model_list[4], model_list[3])))
+
+```
+
+Numéricamente, podemos evaluar esta correlación con <tt>modelCor</tt>.
+
+```{r}
+modelCor(resamples(model_list))
+```
+
+Siguiendo esta premisa, para crear el [<tt>caretEnsemble</tt>](https://www.rdocumentation.org/packages/caretEnsemble/versions/2.0.1/topics/caretEnsemble) vamos a seleccionar los modelos "svm" y "nnet" que hemos entrenado antes, equilibrando buenos resultados e independencia.
+
+```{r}
+model_list_selected <- model_list_original
+model_list_selected$rpart   <- NULL
+model_list_selected$xgbTree <- NULL
+model_list_selected$rf      <- NULL
+
+greedy_ensemble <- caretEnsemble(
+  model_list_selected, 
+  metric="ROC",
+  trControl=trainControl(
+    number=5,
+    summaryFunction=twoClassSummary,
+    classProbs=TRUE
+  ))      
+
+summary(greedy_ensemble)  # resultados obtenidos en entrenamiento
+```
+
+Validar los resultados del ensemble y comparar frente a los de los modelos (adaptación del código de 2.1). Se puede ver que los resultados de validación del ensemble mejoran ligeramente los de los dos modelos por separado.
+```{r}
+# Comparar resultados en curva ROC
+colors <- brewer.pal(length(greedy_ensemble$models) + 1, "Pastel1")
+
+## crear tabla de resultados ROC (+ leyendas y colores)
+roc_table <- tibble(name=character(), auc=list(), color=character())
+
+## añadir validación de modelo nnet inicial a la tabla roc_table
+roc_table <- roc_table %>%
+  add_row(name = paste("nnet AUC=", round(roc_4$auc$auc[[1]], 2)), 
+          auc = list(roc_4$auc),
+          color = colors[1])
+
+## añadir validación de modelo svm inicial a la tabla roc_table
+roc_table <- roc_table %>%
+  add_row(name = paste("svm AUC=", round(roc_3$auc$auc[[1]], 2)), 
+          auc = list(roc_3$auc),
+          color = colors[1])
+
+## añadir validación de modelo ensemble la tabla roc_table
+predictionProb <- data.frame(Good = predict(greedy_ensemble, val, type = "prob"), 
+                             Bad  = 1 - predict(greedy_ensemble, val, type = "prob"))
+roc_ge <- my_roc(val, predictionProb, "Class", "Good", show_plot = FALSE)
+roc_table <- roc_table %>%
+  add_row(name = paste("ensemble AUC=", round(roc_ge$auc$auc[[1]], 2)), 
+          auc = list(roc_ge$auc),
+          color = colors[2])
+
+## mostrar curvas en pantalla
+plot <- plot.roc(roc_table[1,]$auc[[1]], ylim=c(0,1), type = "S", col = roc_table[1,]$color)
+for(i in 2:nrow(roc_table)) {
+  lines.roc(roc_table[i,]$auc[[1]], type = "S",  col = roc_table[i,]$color)
+}
+
+## insertar leyendas
+legend("bottomright", 
+       legend = roc_table$name,
+       col = roc_table$color,
+       lty = c(1, 1, 1),   # tipo de linea
+       lwd = c(2, 2, 2))   # grosor de linea 
+```
+
+##3.2 _stacking_ avanzado
+Ahora vamos a crear un nuevo _stacking_ en el que, en lugar de realizar una combinación lineal con pesos, usaremos un modelo de regresión generalizado como [GLM](https://rdrr.io/cran/caret/man/models.html). En este caso, utilizamos [<tt>caretStack</tt>](https://www.rdocumentation.org/packages/caretEnsemble/versions/2.0.1/topics/caretStack) y los mismos modelos que antes, "nnet" y "svm".
+```{r message=FALSE}
+generalized_ensemble <- caretStack(
+  model_list_selected, 
+  method="glm",
+  metric="ROC",
+  trControl=trainControl(
+    number=5,
+    summaryFunction=twoClassSummary,
+    classProbs=TRUE
+  ))  
+
+summary(generalized_ensemble)  # resultados obtenidos en entrenamiento
+```
+
+Validar los resultados del ensemble y comparar frente a los de los modelos (adaptación del código de 2.1). Se puede ver que los resultados de validación del ensemble mejoran ligeramente los de los dos modelos por separado y quedan aproximadamente igual que con el modelo lineal.
+```{r}
+# Comparar resultados en curva ROC
+colors <- brewer.pal(length(generalized_ensemble$models) + 2, "Pastel1")
+
+## crear tabla de resultados ROC (+ leyendas y colores)
+roc_table <- tibble(name=character(), auc=list(), color=character())
+
+## añadir validación de modelo nnet inicial a la tabla roc_table
+roc_table <- roc_table %>%
+  add_row(name = paste("nnet AUC=", round(roc_4$auc$auc[[1]], 2)), 
+          auc = list(roc_4$auc),
+          color = colors[1])
+
+## añadir validación de modelo svm inicial a la tabla roc_table
+roc_table <- roc_table %>%
+  add_row(name = paste("svm AUC=", round(roc_3$auc$auc[[1]], 2)), 
+          auc = list(roc_3$auc),
+          color = colors[2])
+
+## añadir validación de modelo greedy ensemble la tabla roc_table
+predictionProb <- data.frame(Good = predict(greedy_ensemble, val, type = "prob"), 
+                             Bad  = 1 - predict(greedy_ensemble, val, type = "prob"))
+roc_ge <- my_roc(val, predictionProb, "Class", "Good", show_plot = T)
+roc_table <- roc_table %>%
+  add_row(name = paste("ensemble greedy AUC=", round(roc_ge$auc$auc[[1]], 2)), 
+          auc = list(roc_ge$auc),
+          color = colors[3])
+
+## añadir validación de modelo generalizado ensemble la tabla roc_table
+predictionProb <- data.frame(Good = predict(generalized_ensemble, val, type = "prob"), 
+                             Bad  = 1 - predict(generalized_ensemble, val, type = "prob"))
+roc_gene <- my_roc(val, predictionProb, "Class", "Good", show_plot = T)
+roc_table <- roc_table %>%
+  add_row(name = paste("ensemble general AUC=", round(roc_gene$auc$auc[[1]], 2)), 
+          auc = list(roc_gene$auc),
+          color = colors[4])
+
+## mostrar curvas en pantalla
+plot <- plot.roc(roc_table[1,]$auc[[1]], ylim=c(0,1), type = "S", col = roc_table[1,]$color)
+for(i in 2:nrow(roc_table)) {
+  lines.roc(roc_table[i,]$auc[[1]], type = "S",  col = roc_table[i,]$color)
+}
+
+## insertar leyendas
+legend("bottomright", 
+       legend = roc_table$name,
+       col = roc_table$color,
+       lty = 1,   # tipo de linea
+       lwd = 2)   # grosor de linea 
+```
+
+<script type="text/javascript">
+  <!-- https://stackoverflow.com/questions/39281266/use-internal-links-in-rmarkdown-html-output/39293457 -->
+  // When the document is fully rendered...
+  $(document).ready(function() {
+    // ...select all header elements...
+    $('h1, h2, h3, h4, h5').each(function() {
+      // ...and add an id to them corresponding to their 'titles'
+      $(this).attr('id', $(this).html());
+    });
+  });
+</script>
