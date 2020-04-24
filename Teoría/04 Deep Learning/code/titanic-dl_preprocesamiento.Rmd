@@ -1,0 +1,166 @@
+---
+title: "Deep Learning con conjunto de datos Titanic"
+output:
+  html_document:
+    df_print: paged
+html_notebook: default
+---
+
+Deep Learning con el dataset [titanic](https://www.kaggle.com/c/titanic/).
+
+> El hundimiento del Titanic es una de las tragedias marítimas más conocidas de la historia. El 15 de abril de 1912, durante su viaje inaugural, el Titanic se hundió después de chocar contra un iceberg. En el accidente murieron 1502 personas de las 2224 que habían embarcado, inluyendo pasajeros y tripulación. Una de las razones por las que no se encontraron más supervivientes fue la falta de espacio en los barcos salvavidas. Así, aunque la suerte sin duda sonrió a los supervivientes, también resultaron más favorecidos algunos grupos de personas, como las mujeres, los niños y los pasajeros de la clase superior.
+
+**En este problema analizaremos qué tipos de personas tuvieron más probabilidades de sobrevivir. Para ello, aplicaremos técnicas de Deep Learning para predecir qué pasajeros sobrevivieron al hundimiento.**
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(0)
+```
+
+Comenzamos leyendo los datos del problema y seleccionando las variables que funcionan bien para la predicción: _Pclass_, _Sex_, _Age_, _Fare_. El objetivo de predicción es _Survived_. Omitimos los valores perdidos, aunque sería interesante [trabajar con ellos](https://github.com/jgromero/sige2020/blob/master/Teor%C3%ADa/02%20Depuraci%C3%B3n%20y%20calidad%20de%20datos/code/titanic-missing-noise.Rmd).
+
+```{r message=FALSE}
+library(tidyverse)
+data <- read_csv('train.csv') %>%
+  select(Survived, Pclass, Sex, Age, Fare) %>%
+  mutate(Sex = as.numeric(as.factor(Sex)) - 1) %>%
+  na.omit()
+
+knitr::kable(head(data))
+```
+
+En primer lugar, comprobamos que está disponibles [keras](https://keras.rstudio.com/). Si no, seguimos el [procedimiento de instalación](https://keras.rstudio.com/#getting-started).
+```{r}
+library(keras)
+is_keras_available()
+```
+
+***
+![](lamp.png)
+Después, preprocesamos los datos para mejorar el entrenamiento:
+
+* Binarizar _Pclass_, _Sex_ con [to_categorical](https://keras.rstudio.com/reference/to_categorical.html)
+* Escalar a [0, 1] _Age_, _Fare_ con [rescale](https://www.rdocumentation.org/packages/scales/versions/0.4.1/topics/rescale)
+
+```{r message=FALSE}
+# binarizar Pclass, Sex
+Pclass_binary <- to_categorical(data$Pclass-1) # similar a: dummyVars en caret
+colnames(Pclass_binary) <- paste0("Pclass.", 1:3)
+Pclass_binary <- as_tibble(Pclass_binary)
+
+Sex_binary <- to_categorical(data$Sex)
+colnames(Sex_binary) <- paste0("Sex.", 0:1)
+Sex_binary <- as_tibble(Sex_binary)
+
+# escalar Age, Fare a [0, 1]
+library(scales)
+Age_rescaled <- rescale(data$Age) # similar a: preProcess en caret
+Age_rescaled <- as_tibble(Age_rescaled) %>% rename(Age_resc = value)
+
+Fare_rescaled <- rescale(data$Fare) 
+Fare_rescaled <- as_tibble(Fare_rescaled) %>% rename(Fare_resc = value)
+
+# recomponer conjunto de entrenamiento
+data_preprocessed <- data %>%
+  select(Survived) %>%
+  bind_cols(Pclass_binary) %>%
+  bind_cols(Sex_binary) %>%
+  bind_cols(Age_rescaled) %>%
+  bind_cols(Fare_rescaled)
+```
+
+***
+
+A continuación, creamos la red neuronal que vamos a utilizar. Optamos por una red bastante sencilla:
+
+* Una capa de entrada, de tamaño _ncol(data\_preprocessed) - 1_ (todas las variables menos el objetivo de predicción)
+* Dos capas ocultas, con 32 y 16 neuronas respectivamente y activación tipo "relu"
+* Una capa de salida, con 1 neurona y activación tipo "sigmoid"
+
+```{r}
+model <- keras_model_sequential()
+model <- model %>% 
+  layer_dense(units = 32, activation = "relu", input_shape = c(ncol(data_preprocessed) - 1)) %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dense(units = 1, activation = "sigmoid")
+```
+
+Podemos revisar la arquitectura de la red y los parámetros (pesos) que se deben aprender:
+```{r}
+summary(model)
+```
+
+Para entrenar el modelo, primero utilizamos [<tt>compile</tt>](https://keras.rstudio.com/reference/compile.html) para especificar el optimizador, la función de pérdida, etc.
+```{r}
+model %>% compile(
+  loss = 'binary_crossentropy',
+  metrics = c('accuracy'),
+  optimizer = optimizer_adam()
+)
+```
+
+Después, especificamos el conjunto de entrenamiento y validación, que deben especificarse por separado y con tipo de dato _matrix_.
+```{r message=FALSE}
+library(caret)
+trainIndex <- createDataPartition(data_preprocessed$Survived, p = .7, list = FALSE)[,1]  
+## Atencion: [,1] para versiones de tibble >= 3.0
+
+train      <- data_preprocessed[trainIndex, ] 
+val        <- data_preprocessed[-trainIndex, ]
+
+x_train <- train %>%
+  select(-Survived) %>%
+  data.matrix()
+
+y_train <- train %>%
+  select(Survived) %>%
+  data.matrix()
+```
+
+Ya podemos ajustar el modelo con [<tt>fit</tt>](https://keras.rstudio.com/reference/fit.html). Los parámetros que especificmos son el número de iteraciones completas (_epochs_) y el tamaño del lote para el gradiente descendente con minilotes (_batch\_size_). También puede indicarse que se quiere utilizar una parte del conjunto de entrenamiento para realizar validación al final de cada _epoch_.
+```{r message=FALSE}
+history <- model %>% 
+  fit(
+    x_train, y_train, 
+    epochs = 20, 
+    batch_size = 100, 
+    validation_split = 0.10
+  )
+plot(history)
+```
+
+Podemos evaluar el modelo sobre el conjunto de validación:
+```{r}
+x_val <- val %>%
+  select(-Survived) %>%
+  data.matrix()
+
+y_val <- val %>%
+  select(Survived) %>%
+  data.matrix()
+
+model %>% evaluate(x_val, y_val)
+```
+
+Y, finalmente, realizar predicciones con él:
+```{r}
+predictions <- model %>% predict_classes(x_val)
+```
+
+Con las predicciones, se puede estudiar el comportamiento de la red con los datos de validación. Así, creamos una matriz de confusión:
+```{r}
+cm <- confusionMatrix(as.factor(y_val), as.factor(predictions))
+cm_prop <- prop.table(cm$table)
+knitr::kable(cm$table)
+```
+
+Y, por último, generar una representación visual de la matriz de confusión:
+```{r message=FALSE}
+cm_tibble <- as_tibble(cm$table) 
+
+ggplot(data = cm_tibble) + 
+  geom_tile(aes(x=Reference, y=Prediction, fill=n), colour = "white") +
+  geom_text(aes(x=Reference, y=Prediction, label=n), colour = "white") +
+  scale_fill_continuous(trans = 'reverse') 
+```
+```
