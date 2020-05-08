@@ -1,0 +1,8 @@
+{
+  "hidden_units": 100,
+  "hidden_activation": "relu",
+  "dropout": 0.4,
+  "epsilon": 0.01,
+  "batch_size": 256,
+  "epochs": 5
+}

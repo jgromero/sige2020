@@ -1,0 +1,128 @@
+
+> ## -------------------------------------------------------------------------------------
+> ## Sistemas Inteligentes para la Gestión en la Empresa
+>  .... [TRUNCATED] 
+
+> FLAGS <- flags(
++   flag_numeric("hidden_units", 100),
++   flag_string("hidden_activation", "sigmoid"),
++   flag_numeric("dropout", 0.3),
++   flag_n .... [TRUNCATED] 
+
+> ## -------------------------------------------------------------------------------------
+> ## Cargar y pre-procesar datos
+> 
+> # Cargar MNIST
+> mnis .... [TRUNCATED] 
+
+> x_train <- mnist$train$x
+
+> y_train <- mnist$train$y
+
+> x_test  <- mnist$test$x
+
+> y_test  <- mnist$test$y
+
+> # Redimensionar imagenes
+> x_train <- array_reshape(x_train, c(nrow(x_train), 28, 28, 1))  # 60.000 matrices 28x28x1
+
+> x_test  <- array_reshape(x_test,  c(nrow(x_test),  28, 28, 1))  # 60.000 matrices 28x28x1
+
+> # Reescalar valores de imagenes a [0, 255]
+> x_train <- x_train / 255
+
+> x_test  <- x_test  / 255
+
+> # Crear 'one-hot' encoding
+> y_train <- to_categorical(y_train, 10)
+
+> y_test  <- to_categorical(y_test,  10)
+
+> ## -------------------------------------------------------------------------------------
+> ## Crear modelo
+> 
+> # Definir arquitectura
+> model <- ke .... [TRUNCATED] 
+
+> model %>% 
++   layer_conv_2d(filters = 20, kernel_size = c(5, 5), activation = "relu", input_shape = c(28, 28, 1)) %>%
++   layer_batch_normalization .... [TRUNCATED] 
+
+> summary(model)
+Model: "sequential_17"
+____________________________________________________________________________________________________
+Layer (type)                                 Output Shape                            Param #        
+====================================================================================================
+conv2d_17 (Conv2D)                           (None, 24, 24, 20)                      520            
+____________________________________________________________________________________________________
+batch_normalization_12 (BatchNormalization)  (None, 24, 24, 20)                      80             
+____________________________________________________________________________________________________
+max_pooling2d_17 (MaxPooling2D)              (None, 12, 12, 20)                      0              
+____________________________________________________________________________________________________
+flatten_17 (Flatten)                         (None, 2880)                            0              
+____________________________________________________________________________________________________
+dense_34 (Dense)                             (None, 100)                             288100         
+____________________________________________________________________________________________________
+dropout_9 (Dropout)                          (None, 100)                             0              
+____________________________________________________________________________________________________
+dense_35 (Dense)                             (None, 10)                              1010           
+====================================================================================================
+Total params: 289,710
+Trainable params: 289,670
+Non-trainable params: 40
+____________________________________________________________________________________________________
+
+> # Compilar modelo
+> model %>% compile(
++   loss = 'categorical_crossentropy',
++   optimizer = optimizer_rmsprop(),
++   metrics = c('accuracy')
++ )
+
+> # Entrenamiento
+> history <- model %>% 
++   fit(
++     x_train, y_train, 
++     epochs = FLAGS$epochs, 
++     batch_size = FLAGS$batch_size,
++     v .... [TRUNCATED] 
+
+> # Guardar modelo (HDF5)
+> model %>% save_model_hdf5("minist-cnn.h5")
+
+> # Visualizar entrenamiento
+> plot(history)
+
+> ## -------------------------------------------------------------------------------------
+> ## Evaluar modelo con datos de validación
+> 
+> # Calcular .... [TRUNCATED] 
+$loss
+[1] 0.04806169
+
+$accuracy
+[1] 0.987
+
+
+> # Obtener predicciones de clase
+> predictions <- model %>% 
++   predict_classes(x_test)
+
+> # Crear matriz de confusión
+> library(caret)
+
+> cm <- confusionMatrix(as.factor(mnist$test$y), as.factor(predictions))
+
+> cm_prop <- prop.table(cm$table)
+
+> plot(cm$table)
+
+> library(dplyr)
+
+> library(scales)
+
+> cm_tibble <- as_tibble(cm$table)
+
+> ggplot(data = cm_tibble) + 
++   geom_tile(aes(x=Reference, y=Prediction, fill=n), colour = "white") +
++   geom_text(aes(x=Reference, y=Prediction, l .... [TRUNCATED] 
