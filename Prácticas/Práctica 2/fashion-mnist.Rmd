@@ -1,0 +1,138 @@
+---
+title: "Fashion MNIST"
+author: "Juan Gómez Romero"
+date: "21/4/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Basado en: [Tutorial: Basic Classification with Fashion-MNIST](
+https://cran.r-project.org/web/packages/keras/vignettes/tutorial_basic_classification.html).
+
+Datos ofrecidos por [Zalando Research](https://github.com/zalandoresearch/fashion-mnist).
+
+# Preparación de datos
+Cargar datos:
+```{r message=FALSE}
+library(tidyverse)
+library(keras)
+data <- dataset_fashion_mnist()
+
+x_train <- data$train$x
+y_train <- data$train$y
+
+x_test <- data$test$x
+y_test <- data$test$y
+```
+
+Explorar datos:
+```{r}
+image(x_train[1, , ])
+title(paste("Category:", y_train[1]))
+
+image(t(x_train[1, 28:1, ]), col = grey(seq(0, 1, length = 256)))
+title(paste("Category:", y_train[1]))
+```
+
+```{r}
+ggplot() +
+  geom_bar(aes(x = as.factor(y_train)), fill = "grey80") +
+  theme_minimal() +
+  labs(
+    x = "Categories", y = "# Images",
+    title = "Data distribution of Fashion-MNIST dataset",
+    subtitle = "Count by categories in train subset\n",
+    caption = "\nSource: Keras Fashion-MNIST"
+  )
+  
+```
+
+Redimensionar imagenes:
+```{r}
+x_train <- array_reshape(x_train, c(nrow(x_train), 28, 28, 1))  # 60.000 arrays de 28x28x1 elementos
+x_test  <- array_reshape(x_test,  c(nrow(x_test),  28, 28, 1))  # 10.000 arrays de 28x28x1 elementos
+```
+
+Reescalar valores de imagenes a [0, 255]:
+```{r}
+x_train <- x_train / 255
+x_test  <- x_test  / 255
+```
+
+Crear 'one-hot' encoding (codificación binaria):
+```{r}
+y_train <- to_categorical(y_train, 10)
+y_test  <- to_categorical(y_test,  10)
+```
+
+# Entrenamiento del modelo
+Crear modelo:
+```{r}
+model <- keras_model_sequential() 
+model %>% 
+  layer_conv_2d(filters = 20, kernel_size = c(5, 5), activation = "relu", input_shape = c(28, 28, 1)) %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_flatten() %>%
+  layer_dense(units = 100, activation = "sigmoid") %>%
+  layer_dense(units = 10, activation = "softmax")
+  
+summary(model)
+```
+
+Compilar modelo:
+```{r}
+model %>% compile(
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = c('accuracy')
+)
+```
+
+Entrenamiento:
+```{r}
+history <- model %>% 
+  fit(
+    x_train, y_train, 
+    epochs = 5, 
+    batch_size = 128,
+    validation_split = 0.2
+  )
+
+# Guardar modelo (HDF5)
+save_model_hdf5(model, "minist_fashion_cnn.h5")
+```
+
+Visualizar entrenamiento:
+```{r}
+plot(history)
+```
+
+# Evaluación del modelo
+Calcular metrica sobre datos de validación:
+```{r}
+score <- evaluate(model, x_test, y_test)
+cat('Test accuracy:', score$acc, "\n")
+```
+
+Crear matriz de confusión:
+```{r message=FALSE}
+predictions <- predict_classes(model, x_test)
+
+library(caret)
+cm <- confusionMatrix(as.factor(data$test$y), as.factor(predictions))
+cm_prop <- prop.table(cm$table)
+plot(cm$table)
+```
+
+Visualizar matriz de confusión:
+```{r message=FALSE}
+library(scales)
+cm_tibble <- as_tibble(cm$table)
+ggplot(data = cm_tibble) + 
+  geom_tile(aes(x=Reference, y=Prediction, fill=n), colour = "white") +
+  geom_text(aes(x=Reference, y=Prediction, label=n), colour = "white") +
+  scale_fill_continuous(trans = 'reverse')
+```
